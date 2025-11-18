@@ -1,0 +1,18 @@
+{
+  "@class": "org.apereo.cas.services.CasRegisteredService",
+  "serviceId": "^https://localhost:9859/anything/cas2",
+  "id": 2,
+  "name": "Sample",
+  "accessStrategy" : {
+    "@class" : "org.apereo.cas.services.DefaultRegisteredServiceAccessStrategy",
+    "ssoEnabled" : false
+  },
+  "attributeReleasePolicy" : {
+    "@class" : "org.apereo.cas.services.ReturnMappedAttributeReleasePolicy",
+    "authorizedToReleaseAuthenticationAttributes": true,
+    "allowedAttributes" : {
+      "@class" : "java.util.TreeMap",
+      "randomNumber" : "groovy { return org.apereo.cas.util.RandomUtils.generateSecureRandomId() }"
+    }
+  }
+}

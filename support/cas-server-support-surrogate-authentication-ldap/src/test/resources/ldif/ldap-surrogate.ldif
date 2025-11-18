@@ -1,0 +1,46 @@
+dn: cn=$user,ou=surrogates,dc=example,dc=org
+objectClass: organizationalRole
+objectClass: inetOrgPerson
+objectClass: person
+objectClass: account
+cn: $user
+userPassword: 123456
+mail: $user@example.org
+sn: CAS
+uid: $user
+employeeType: banderson
+
+dn: cn=$admin,ou=surrogates,dc=example,dc=org
+objectClass: organizationalRole
+objectClass: inetOrgPerson
+objectClass: person
+objectClass: account
+cn: $admin
+userPassword: 123456
+mail: *
+sn: CAS
+uid: $admin
+employeeType: *
+
+dn: cn=banderson,ou=surrogates,dc=example,dc=org
+objectClass: organizationalRole
+objectClass: inetOrgPerson
+objectClass: person
+objectClass: account
+cn: banderson
+userPassword: 123456
+mail: banderson@apereo.org
+sn: CAS
+uid: banderson
+employeeType: nothing
+
+dn: cn=nomail,ou=surrogates,dc=example,dc=org
+objectClass: organizationalRole
+objectClass: inetOrgPerson
+objectClass: person
+objectClass: account
+cn: nomail
+userPassword: 123456
+sn: CAS
+uid: nomail
+employeeType: nothing

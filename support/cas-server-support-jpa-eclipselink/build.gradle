@@ -1,0 +1,31 @@
+description = "Apereo CAS JPA EclipseLink Support"
+ext {
+    publishMetadata = true
+    projectMetadata = [
+            category: "Relational Databases (JDBC & JPA)",
+            title: "JPA via eclipseLink"
+    ]
+}
+dependencies {
+    api project(":api:cas-server-core-api-authentication")
+    api project(":api:cas-server-core-api-configuration-model")
+    api project(":api:cas-server-core-api-ticket")
+    api project(":api:cas-server-core-api-util")
+    api project(":api:cas-server-core-api-web")
+    
+    api libraries.eclipselink
+
+    implementation libraries.hikaricp
+
+    implementation project(":support:cas-server-support-jpa-util")
+    implementation project(":core:cas-server-core-util")
+
+    runtimeOnly project(":support:cas-server-support-jdbc-drivers")
+
+    testImplementation project(":core:cas-server-core-scripting")
+    
+    testImplementation project(path: ":core:cas-server-core-util-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-web-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-authentication-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-services", configuration: "tests")
+}

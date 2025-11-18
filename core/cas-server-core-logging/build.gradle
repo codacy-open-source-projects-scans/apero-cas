@@ -1,0 +1,30 @@
+description = "Apereo CAS Core Logging"
+ext {
+    publishMetadata = true
+    projectMetadata = [
+            category: "Logging",
+            title: "Apache Log4j",
+            aliases: ["log4j"]
+    ]
+}
+dependencies {
+    api project(":api:cas-server-core-api-cookie")
+    
+    implementation project(":core:cas-server-core-logging-api")
+    implementation project(":core:cas-server-core-cookie-api")
+    implementation project(":core:cas-server-core-util-api")
+    implementation project(":core:cas-server-core-web-api")
+    implementation project(":core:cas-server-core-configuration-api")
+
+    implementation libraries.log4j
+
+    testImplementation project(":core:cas-server-core-cookie")
+    testImplementation project(":core:cas-server-core-tickets")
+    testImplementation project(":core:cas-server-core-multitenancy")
+    testImplementation project(":core:cas-server-core-configuration")
+    
+    testImplementation project(path: ":core:cas-server-core-authentication-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-util-api", configuration: "tests")
+}
+
+

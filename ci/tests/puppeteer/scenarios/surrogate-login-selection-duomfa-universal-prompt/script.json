@@ -1,0 +1,53 @@
+{
+  "dependencies": "surrogate-webflow,duo,reports,generic",
+  "conditions": {
+    "env": "DUO_SECURITY_ADMIN_SKEY,DUO_SECURITY_ADMIN_IKEY,DUO_SECURITY_UNIVERSAL_PROMPT_SKEY,DUO_SECURITY_UNIVERSAL_PROMPT_IKEY,DUO_SECURITY_API_HOST",
+    "docker": "true"
+  },
+  "properties": [
+
+    "--logging.level.org.springframework.webflow=info",
+    
+    "--cas.server.name=https://localhost:8443",
+    "--cas.server.prefix=${cas.server.name}/cas",
+
+    "--cas.ticket.st.time-to-kill-in-seconds=60",
+
+    "--cas.authn.attribute-repository.json[0].location=file:${PWD}/ci/tests/puppeteer/scenarios/${SCENARIO}/attribute-repository.json",
+    
+    "--cas.service-registry.core.init-from-json=true",
+    "--cas.service-registry.json.location=file:${PWD}/ci/tests/puppeteer/scenarios/${SCENARIO}/services",
+
+    "--cas.authn.surrogate.simple.surrogates.duobypass=user1,user2,user3",
+
+    "--cas.authn.mfa.triggers.global.global-provider-id=mfa-duo",
+    "--cas.authn.accept.users=duobypass::Mellon,duocode::Mellon",
+
+    "--cas.authn.mfa.duo[0].duo-admin-secret-key=${#environmentVars['DUO_SECURITY_ADMIN_SKEY']}",
+    "--cas.authn.mfa.duo[0].duo-admin-integration-key=${#environmentVars['DUO_SECURITY_ADMIN_IKEY']}",
+
+    "--cas.authn.mfa.duo[0].duo-secret-key=${#environmentVars['DUO_SECURITY_UNIVERSAL_PROMPT_SKEY']}",
+    "--cas.authn.mfa.duo[0].duo-integration-key=${#environmentVars['DUO_SECURITY_UNIVERSAL_PROMPT_IKEY']}",
+    "--cas.authn.mfa.duo[0].duo-api-host=${#environmentVars['DUO_SECURITY_API_HOST']}",
+
+    "--cas.authn.mfa.duo[0].account-status-enabled=false",
+    "--cas.authn.mfa.duo[0].collect-duo-attributes=false",
+
+    "--cas.monitor.endpoints.endpoint.defaults.access=ANONYMOUS",
+    "--management.endpoints.web.exposure.include=*",
+    "--management.endpoints.access.default=UNRESTRICTED"
+  ],
+  "variations": [
+    {
+      "properties": [
+        "--cas.authn.mfa.duo[0].session-storage-type=BROWSER_STORAGE"
+      ]
+    },
+    {
+      "properties": [
+        "--cas.authn.mfa.duo[0].session-storage-type=TICKET_REGISTRY"
+      ]
+    }
+  ],
+  "initScript": "${PWD}/ci/tests/httpbin/run-httpbin-server.sh"
+}

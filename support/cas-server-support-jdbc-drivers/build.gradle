@@ -1,0 +1,13 @@
+description = "Apereo CAS JDBC Driver Support"
+ext {
+    publishMetadata = true
+    projectMetadata = [
+            category: "Relational Databases (JDBC & JPA)",
+            title: "Database Drivers"
+    ]
+}
+
+dependencies {
+    api project(":api:cas-server-core-api")
+    runtimeOnly libraries.databasedrivers
+}

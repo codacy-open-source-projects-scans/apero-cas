@@ -1,0 +1,73 @@
+description = "Apereo CAS Core Web"
+dependencies {
+    api project(":api:cas-server-core-api-web")
+    api project(":api:cas-server-core-api-ticket")
+    api project(":api:cas-server-core-api-services")
+    api project(":api:cas-server-core-api-logout")
+    api project(":api:cas-server-core-api-webflow")
+
+    implementation project(":core:cas-server-core-authentication-api")
+    implementation project(":core:cas-server-core-configuration-api")
+    implementation project(":core:cas-server-core-util-api")
+    implementation project(":core:cas-server-core-web-api")
+    implementation project(":core:cas-server-core-audit-api")
+    implementation project(":core:cas-server-core-multitenancy")
+    implementation project(":core:cas-server-core-configuration")
+
+    testImplementation project(path: ":core:cas-server-core-util-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-authentication-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-services", configuration: "tests")
+
+    testImplementation project(":core:cas-server-core-services-registry")
+    testImplementation project(":core:cas-server-core-services-api")
+    testImplementation project(":core:cas-server-core-services-authentication")
+    testImplementation project(":core:cas-server-core-services")
+    testImplementation project(":core:cas-server-core")
+    testImplementation project(":core:cas-server-core-util")
+    testImplementation project(":core:cas-server-core-tickets")
+    testImplementation project(":core:cas-server-core-authentication")
+    testImplementation project(":core:cas-server-core-logout")
+    testImplementation project(":core:cas-server-core-notifications")
+    testImplementation project(":core:cas-server-core-scripting")
+
+    testRuntimeOnly libraries.webjars
+    testRuntimeOnly libraries.webjarsbootstrap
+    testRuntimeOnly libraries.webjarspalantir
+    testRuntimeOnly libraries.websockets
+    
+    implementation libraries.snakeyaml
+}
+
+def versionDefinitions  = libs.versions.metaClass.properties.findAll { it.type == Provider }
+def dependencyVersions = versionDefinitions.collectEntries { field ->
+    [field.name, field.getProperty(libs.versions).getOrNull()]
+}
+processResources {
+    inputs.properties(dependencyVersions)
+    filesMatching("**/*.properties") {
+        expand(dependencyVersions)
+    }
+}
+
+/* 
+    Manually deleting jar if we have a newer than jar
+    Probably a better way, but watch out for "tasks.jar.onlyIf" elsewhere in build scripts
+ */
+jar.dependsOn 'deleteJar'
+
+tasks.register('deleteJar', Delete) {
+    def jarFile = file("build/libs/${project.name}-${project.version}.jar")
+    def gradlePropFile = rootProject.file("gradle/libs.versions.toml")
+
+    def propModified = gradlePropFile.lastModified()
+    def jarModified = jarFile.lastModified()
+    if (propModified > jarModified) {
+        doLast {
+            logger.info("""
+Deleting JAR files [$jarFile] due to dependency version change. Last update was at [$propModified]
+which is the greater than the last time the JAR files were updated at [$jarModified].
+""")
+        }
+        delete jarFile
+    }
+}

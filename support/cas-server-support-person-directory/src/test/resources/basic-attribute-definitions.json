@@ -1,0 +1,34 @@
+{
+  "@class" : "java.util.TreeMap",
+  "eppn" : {
+    "@class" : "org.apereo.cas.authentication.attribute.DefaultAttributeDefinition",
+    "key": "eppn",
+    "name" : "urn:oid:1.3.6.1.4.1.5923.1.1.1.6",
+    "scoped" : true,
+    "attribute" : "uid"
+  },
+  "attribute" : {
+    "@class" : "org.apereo.cas.authentication.attribute.DefaultAttributeDefinition",
+    "key": "mismatchedAttributeKey",
+    "name" : "interesting-attribute",
+    "attribute" : "givenName",
+    "scoped": true
+  },
+  "memberships" : {
+    "@class" : "org.apereo.cas.authentication.attribute.DefaultAttributeDefinition",
+    "key": "memberships",
+    "attribute" : "memberships",
+    "name": "affiliations",
+    "patterns" : {
+      "@class" : "java.util.TreeMap",
+      "m[0-2].*" : "admins",
+      "m[3-6].*" : "groovy { return 'users' }"
+    }
+  },
+  "allgroups" : {
+    "@class" : "org.apereo.cas.authentication.attribute.DefaultAttributeDefinition",
+    "key": "allgroups",
+    "attribute" : "memberships",
+    "flattened": "/"
+  }
+}

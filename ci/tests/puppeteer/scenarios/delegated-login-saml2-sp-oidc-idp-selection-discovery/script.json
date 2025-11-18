@@ -1,0 +1,46 @@
+{
+  "dependencies": "saml-idp,pac4j-webflow,pac4j-oidc,pac4j-cas",
+  "conditions": {
+    "docker": "true"
+  },
+
+  "properties": [
+
+    "--cas.http-client.host-name-verifier=none",
+
+    "--cas.authn.attribute-repository.stub.attributes.email=casuser@apereo.org",
+    "--cas.authn.attribute-repository.stub.attributes.name=CAS",
+    "--cas.authn.attribute-repository.stub.attributes.gender=female",
+    "--cas.authn.attribute-repository.stub.attributes.preferred_username=casuser",
+
+    "--cas.service-registry.core.init-from-json=true",
+    "--cas.service-registry.json.location=file:${PWD}/ci/tests/puppeteer/scenarios/${SCENARIO}/services",
+
+    "--cas.authn.saml-idp.core.entity-id=https://cas.apereo.org/saml/idp",
+    "--cas.authn.saml-idp.metadata.file-system.location=file:${PWD}/ci/tests/puppeteer/scenarios/${SCENARIO}/saml-md",
+
+    "--cas.server.name=https://localhost:8443",
+    "--cas.server.prefix=https://localhost:8443/cas",
+    "--cas.server.scope=example.net",
+
+    "--cas.authn.pac4j.core.discovery-selection.selection-type=DYNAMIC",
+    "--cas.authn.pac4j.core.discovery-selection.json.location=file:${PWD}/ci/tests/puppeteer/scenarios/${SCENARIO}/discovery.json",
+
+    "--cas.authn.pac4j.oidc[0].generic.principal-id-attribute=email",
+    "--cas.authn.pac4j.oidc[0].generic.id=kc_client",
+    "--cas.authn.pac4j.oidc[0].generic.secret=Tz6b8e11IcUR4bFubPfjzfYmbouqk3rb",
+    "--cas.authn.pac4j.oidc[0].generic.discovery-uri=http://localhost:8988/realms/cas/.well-known/openid-configuration",
+    "--cas.authn.pac4j.oidc[0].generic.preferred-jws-algorithm=RS256",
+    "--cas.authn.pac4j.oidc[0].generic.client-authentication-method=client_secret_basic",
+    "--cas.authn.pac4j.oidc[0].generic.supported-client-authentication-methods=client_secret_basic,client_secret_post",
+    "--cas.authn.pac4j.oidc[0].generic.client-name=Keycloak",
+    "--cas.authn.pac4j.oidc[0].generic.display-name=KeycloakClient",
+    "--cas.authn.pac4j.oidc[0].generic.validate-logout-token=false",
+
+    "--cas.authn.pac4j.cas[0].login-url=https://localhost:8444/cas/login",
+    "--cas.authn.pac4j.cas[0].protocol=CAS30",
+    "--cas.authn.pac4j.cas[0].client-name=CasClient"
+  ],
+  "initScript": "${PWD}/ci/tests/cas/run-cas-server.sh,${PWD}/ci/tests/httpbin/run-httpbin-server.sh",
+  "readyScript": "${PWD}/ci/tests/puppeteer/scenarios/${SCENARIO}/ready.sh"
+}

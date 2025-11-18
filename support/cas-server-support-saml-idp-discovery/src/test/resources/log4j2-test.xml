@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Configuration>
+    <Appenders>
+        <Console name="console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%highlight{%d %p [%c] - &lt;%m&gt;%n}" />
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Logger name="org.apereo.cas" level="error" />
+        <Logger name="org.opensaml" level="warn" />
+        <Logger name="PROTOCOL_MESSAGE" level="warn" />
+        <Logger name="org.apache.xml.security" level="off" />
+        <Logger name="org.springframework" level="error" />
+        <Logger name="org.springframework.aop" level="warn" />
+        <Root level="error">
+            <AppenderRef ref="console"/>
+        </Root>
+    </Loggers>
+</Configuration>

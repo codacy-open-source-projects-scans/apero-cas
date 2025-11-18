@@ -1,0 +1,23 @@
+apply from: rootProject.file("gradle/war.gradle")
+description = "Apereo CAS Web Application via Apache Tomcat"
+
+ext {
+    publishMetadata = true
+    projectMetadata = [
+            title: "Apache Tomcat",
+            facets: ["web"],
+            aliases: ["tomcat"],
+            category: "Web Application"
+    ]
+}
+
+
+dependencies {
+    implementation project(":webapp:cas-server-webapp-init-tomcat")
+
+    testImplementation project(path: ":core:cas-server-core-services", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-authentication-api", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-authentication", configuration: "tests")
+    testImplementation project(path: ":core:cas-server-core-util-api", configuration: "tests")
+}
