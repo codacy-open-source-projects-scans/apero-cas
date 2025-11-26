@@ -35,7 +35,8 @@ function snapshot() {
     -x test -x javadoc -x check --no-daemon --parallel \
     -DskipAot=true -DpublishSnapshots=true --stacktrace \
     --no-configuration-cache --configure-on-demand \
-    -DrepositoryUsername="$REPOSITORY_USER" -DrepositoryPassword="$REPOSITORY_PWD"
+    -DrepositoryUsername="$REPOSITORY_USER" \
+    -DrepositoryPassword="$REPOSITORY_PWD"
   if [ $? -ne 0 ]; then
       printred "Publishing CAS SNAPSHOTs failed."
       exit 1
@@ -112,8 +113,8 @@ function publish {
     printgreen "Current commit is ${currentCommit}"
 
     previousTag=$(git describe --tags --abbrev=0 "${releaseTag}^")
-    echo "Looking at commits in range: $previousTag..$releaseTag" >&2
-
+    echo "Looking at commits in range: $previousTag..$releaseTag" 2>/dev/null
+      
     if [[ -n "${previousTag}" && -n "${releaseTag}" ]]; then
       contributors=$(gh api repos/apereo/cas/compare/$previousTag...$releaseTag \
         --jq '.commits[].author.login // .commits[].commit.author.name' \
@@ -154,14 +155,19 @@ ${contributors}
         printred "Creating GitHub Release for CAS version ${casVersion} failed."
         exit 1
     fi
-
-    echo -e "Closing release milestone for ${casVersion}..."
-    gh milestone close "${casVersion}" --repo "apereo/cas"
-    if [ $? -ne 0 ]; then
-        printred "Closing GitHub milestone for CAS version ${casVersion} failed."
-        exit 1
-    fi
     printgreen "Release process for Apereo CAS ${casVersion} completed successfully!"
+
+    echo "Closing milestone v${casVersion} on GitHub..."
+    gh alias set milestone-close '
+      api /repos/apereo/cas/milestones --jq ".[] | select(.title == \"$1\") | .number" |
+      xargs -I{} gh api \
+        --method PATCH \
+        /apereo/cas/{repo}/milestones/{} \
+        -f state=closed
+    '
+    gh milestone-close "v${casVersion}"
+
+    printgreen "You should now publish the release for CAS v${casVersion} on GitHub!"
     exit 0
 }
 
