@@ -62,9 +62,9 @@ and scenarios. At the moment, total number of jobs stands at approximately `526`
 test coverage of the CAS codebase is approximately `94%`. Furthermore, a large number of test categories that group internal unit tests
 are now configured to run with parallelism enabled.
 
-### Gradle 9.2
+### Gradle 9.3
 
-CAS is now built with Gradle `9.2` and the build process has been updated to use the latest Gradle 
+CAS is now built with Gradle `9.3` and the build process has been updated to use the latest Gradle 
 features and capabilities. 
  
 ### Configuration Properties
@@ -96,6 +96,17 @@ particularly if the codes are set to be encrypted.
 
 <div class="alert alert-warning">:warning: <strong>Breaking Change</strong><p>
 This may be a breaking change. You will need to adjust your database schema based on the notes above.</p></div>
+
+### Palantir Admin Dashboard
+
+[Palantir Admin Console](../installation/Admin-Dashboard.html) now supports a wizard-based web editor
+that allows **registering** registered services.
+
+<div class="alert alert-warning">:warning: <strong>Usage</strong><p>
+This functionality is brand new, and may still have many rough edges. Not every configuration property and setting
+that can presently be assigned to an application record is available via this wizard. We expect this functionality
+to improve and mature over time in the coming releases and based on user demand and sponsorship.
+</p></div>
 
 ### Apache Pulsar Ticket Registry
 
@@ -214,3 +225,6 @@ records, etc are processed and loaded.
 - The order of authentication handlers is now correctly preserved when authentication handlers are registered with the authentication plan.
 - Logging out of [Account Profile](../registration/Account-Management-Overview.html) will now initiate SLO if configured.
 - Memory leak fixes when managing virtual threads responsible for file monitoring features and watch services.
+- Spring Webflow actions may optionally run in the context of a transaction if the underlying action is configured to do so.
+- [OpenID Connect Claims Mapping rules](../authentication/OIDC-Authentication-Claims-Mapping.html) now support external Groovy scripts.
+- [Releasing a principal id based on attributes](../integration/Attribute-Release-PrincipalId-Attribute.html) now supports multiple comma-separated attributes as fallback options.

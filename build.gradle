@@ -89,7 +89,7 @@ if (publishReleases || publishSnapshots) {
             publishingType = "AUTOMATIC"
             validationTimeout.set(Duration.ZERO)
             publishingTimeout.set(Duration.ZERO)
-            uploadSnapshotsParallelism.set(1)
+            uploadSnapshotsParallelism.set(4)
         }
         publishAllProjectsProbablyBreakingProjectIsolation()
     }
@@ -343,6 +343,7 @@ subprojects {
             it.options.errorprone.disableWarningsInGeneratedCode = true
             it.options.errorprone.errorproneArgs = [
                                                     '-Xep:JavaUtilDate:OFF',
+                                                    '-Xep:RequireExplicitNullMarking:OFF',
                                                     '-Xep:BooleanLiteral:OFF',
                                                     '-Xep:StringConcatToTextBlock:OFF',
                                                     '-Xep:AddressSelection:OFF'

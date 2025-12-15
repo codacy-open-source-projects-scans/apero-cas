@@ -136,7 +136,7 @@ function fetchServices(callback) {
             applicationsTable.on("draw", () => {
                 initializeServiceButtons();
             });
-            
+
             applicationsTable.search("").draw();
             saml2MetadataProvidersTable.search("").draw();
 
@@ -175,11 +175,74 @@ function navigateToApplication(serviceIdToFind) {
 }
 
 function initializeFooterButtons() {
-    $("button[name=newService]").off().on("click", () => {
+    $("button[name=copyServiceDefinitionWizard]").off().on("click", () => {
+        const editor = initializeAceEditor("wizardServiceEditor");
+        copyToClipboard(editor.getValue());
+    });
+
+
+    $("button[name=validateServiceWizard]").off().on("click", () => {
+        const $accordion = $("#editServiceWizardMenu");
+        let valid = true;
+        const originalIndex = $("#editServiceWizardMenu").accordion("option", "active");
+        $("#editServiceWizardMenu .ui-accordion-header:visible").each(function () {
+            const $header = $(this);
+            const index = $accordion
+                .find(".ui-accordion-header")
+                .index($header);
+            $accordion.accordion("option", "active", index);
+
+            $("#editServiceWizardForm .ui-accordion-content:visible input:visible").each(function () {
+                const input = $(this);
+                valid = input.get(0).checkValidity();
+                if (!valid) {
+                    input.get(0).reportValidity();
+                    return false;
+                }
+            });
+            if (!valid) {
+                return false;
+            }
+        });
+        if (valid) {
+            const currentIndex = $("#editServiceWizardMenu").accordion("option", "active");
+            if (originalIndex !== currentIndex) {
+                $("#editServiceWizardMenu").accordion("option", "active", originalIndex);
+            }
+            if (actuatorEndpoints.registeredservices) {
+                const editor = initializeAceEditor("wizardServiceEditor");
+                $.ajax({
+                    url: `${actuatorEndpoints.registeredservices}/validate`,
+                    type: "POST",
+                    contentType: "application/json",
+                    data: editor.getValue(),
+                    success: response => {
+                        const message = `
+                            The given application definition is valid and can be parsed by CAS. Please note that validity
+                            does not imply behavioral correctness. It only indicates that the generated
+                            application definition adheres to the expected schema and structure required by CAS
+                            and can be stored successfully.
+                        `;
+                        Swal.fire("Success", message, "info");
+                    },
+                    error: (xhr, status, error) => {
+                        console.error(`Error: ${status} / ${error} / ${xhr.responseText}`);
+                        displayBanner(xhr);
+                    }
+                });
+            }
+        }
+    });
+
+    $("button[name=newServiceWizard]").off().on("click", () => {
+        openRegisteredServiceWizardDialog();
+    });
+
+    $("button[name=newServicePlain]").off().on("click", () => {
         if (actuatorEndpoints.registeredservices) {
             const editServiceDialogElement = document.getElementById("editServiceDialog");
             let editServiceDialog = window.mdc.dialog.MDCDialog.attachTo(editServiceDialogElement);
-            const editor = initializeAceEditor("serviceEditor");
+            const editor = initializeAceEditor("serviceEditor", "json");
             editor.setValue("");
             editor.gotoLine(1);
 
@@ -206,7 +269,6 @@ function initializeFooterButtons() {
                             reader.readAsText(file);
                             reader.onload = e => {
                                 const fileContent = e.target.result;
-
 
                                 $.ajax({
                                     url: `${actuatorEndpoints.registeredservices}`,
@@ -264,7 +326,6 @@ function initializeFooterButtons() {
         }
     });
 }
-
 
 /**
  * Initialization Functions
@@ -472,6 +533,8 @@ function displayBanner(error) {
     }
     if (typeof error === "string") {
         message = error;
+    } else {
+        message = error.message;
     }
     notyf.dismissAll();
     notyf.error(message);
@@ -814,7 +877,6 @@ async function initializeTicketsOperations() {
         });
     }
 }
-
 
 async function initializeSsoSessionOperations() {
     const ssoSessionDetailsTable = $("#ssoSessionDetailsTable").DataTable({
@@ -1239,6 +1301,26 @@ async function initializeLoggingOperations() {
             }
         });
 
+        $("#downloadLogsButton").off().on("click", () => {
+            try {
+                $("#downloadLogsButton").prop("disabled", true);
+                hideBanner();
+                const text = $("#logDataStream").text();
+                const blob = new Blob([text], {type: "text/plain"});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "cas.log";
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                console.error("Error downloading log file:", e);
+                displayBanner(e);
+            } finally {
+                $("#downloadLogsButton").prop("disabled", false);
+            }
+        });
+
     } else {
         $("#loggingDataStreamOps").parent().addClass("d-none");
     }
@@ -1278,7 +1360,7 @@ async function initializeCasSpringWebflowOperations() {
                 if (!selectedState) {
                     const allStates = Object.keys(flow.states).sort();
                     $("#webflowStateFilter").empty().append(
-                        $('<option>', {
+                        $("<option>", {
                             value: "all",
                             text: "All",
                             selected: true
@@ -1287,13 +1369,13 @@ async function initializeCasSpringWebflowOperations() {
 
                     $.each(allStates, (idx, item) => {
                         $("#webflowStateFilter").append(
-                            $('<option>', {
+                            $("<option>", {
                                 value: item,
                                 text: item
                             })
                         );
                     });
-                    $("#webflowStateFilter").selectmenu('refresh');
+                    $("#webflowStateFilter").selectmenu("refresh");
                 }
 
                 let diagramDefinition = `stateDiagram-v2\ndirection LR\n`;
@@ -1305,7 +1387,7 @@ async function initializeCasSpringWebflowOperations() {
                         if (action.startsWith("set ")) {
                             action = "Execute";
                         }
-                        
+
                         if (i === 0) {
                             diagramDefinition += `\t\t[*] --> ${action}: Then\n`;
                         } else {
@@ -1324,7 +1406,7 @@ async function initializeCasSpringWebflowOperations() {
                 } else {
                     diagramDefinition += `\t[*] --> ${flow.startState}: Start\n`;
                 }
-                
+
                 for (let entry of Object.keys(flow.states)) {
                     const state = flow.states[entry];
                     entry = entry.trim().replace(/-/g, "_");
@@ -1379,7 +1461,7 @@ async function initializeCasSpringWebflowOperations() {
                                 if (startActionState.startsWith("set ")) {
                                     startActionState = "Execute";
                                 }
-                                
+
                                 for (let i = 0; i < state.actionList.length; i++) {
                                     let action = state.actionList[i];
                                     if (action.startsWith("set ")) {
@@ -1409,7 +1491,7 @@ async function initializeCasSpringWebflowOperations() {
                         }
                     }
                 }
-                
+
                 $("#webflowMarkdownContainer").removeClass("hide");
                 $("#webflowMarkdown").empty().text(diagramDefinition);
                 const {svg, bindFunctions} = await mermaid.render("webflowDiagram", diagramDefinition);
@@ -1432,11 +1514,11 @@ async function initializeCasSpringWebflowOperations() {
             startOnLoad: false,
             securityLevel: "loose",
             theme: "base",
-            logLevel: 1,
+            logLevel: 4,
             themeVariables: {
                 primaryColor: "deepskyblue",
-                secondaryColor: '#73e600',
-                lineColor: 'deepskyblue'
+                secondaryColor: "#73e600",
+                lineColor: "deepskyblue"
             }
         });
 
@@ -1449,7 +1531,7 @@ async function initializeCasSpringWebflowOperations() {
         $("#webflowStateFilter").empty().selectmenu({
             change: (event, data) => drawFlowStateDiagram()
         });
-        
+
         $.ajax({
             url: `${actuatorEndpoints.springWebflow}`,
             type: "GET",
@@ -1460,14 +1542,14 @@ async function initializeCasSpringWebflowOperations() {
                 const availableFlows = Object.keys(response);
                 $.each(availableFlows, (idx, item) => {
                     $("#webflowFilter").append(
-                        $('<option>', {
+                        $("<option>", {
                             value: item,
-                            text:  item.toUpperCase(),
+                            text: item.toUpperCase(),
                             selected: idx === 0
                         })
                     );
                 });
-                $("#webflowFilter").selectmenu('refresh');
+                $("#webflowFilter").selectmenu("refresh");
                 drawFlowStateDiagram();
             },
             error: (xhr, textStatus, errorThrown) => console.error("Error fetching data:", errorThrown)
@@ -4068,7 +4150,20 @@ document.addEventListener("DOMContentLoaded", () => {
     $(".jqueryui-tabs").tabs().off().on("click", () => updateNavigationSidebar());
     $(".jqueryui-menu").menu();
     $(".jqueryui-selectmenu").selectmenu({
-        width: '350px'
+        width: "350px",
+        change: function (event, ui) {
+            const $select = $(this);
+            const handlerNames = $select.data("change-handler").split(",");
+            for (const handlerName of handlerNames) {
+                if (handlerName && handlerName.length > 0 && typeof window[handlerName] === "function") {
+                    // console.log("Invoking change handler:", handlerName);
+                    const result = window[handlerName]($select, ui);
+                    if (result !== undefined && result === false) {
+                        break;
+                    }
+                }
+            }
+        }
     });
 
     $("nav.sidebar-navigation ul li").off().on("click", function () {
