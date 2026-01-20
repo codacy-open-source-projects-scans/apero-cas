@@ -2,7 +2,7 @@
     The Develocity gradle plugin MUST be applied here.
  */
 plugins {
-    id "com.gradle.develocity" version "4.3"
+    id "com.gradle.develocity" version "4.3.1"
     id "com.gradle.common-custom-user-data-gradle-plugin" version "2.4.0"
     id "org.gradle.toolchains.foojay-resolver-convention" version "1.0.0"
 }
@@ -440,7 +440,7 @@ include "support:cas-server-support-service-registry-stream-hazelcast"
 include "support:cas-server-support-service-registry-stream-kafka"
 include "support:cas-server-support-session-hazelcast"
 include "support:cas-server-support-session-jdbc"
-//include "support:cas-server-support-session-mongo"
+include "support:cas-server-support-session-mongo"
 include "support:cas-server-support-session-redis"
 include "support:cas-server-support-session-ticket-registry"
 include "support:cas-server-support-shell-core"
