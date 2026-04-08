@@ -1,7 +1,6 @@
 package org.apereo.cas.oidc.federation;
 
 import module java.base;
-import org.apereo.cas.oidc.AbstractOidcTests;
 import org.apereo.cas.util.ResourceUtils;
 import org.apereo.cas.util.spring.SpringExpressionLanguageValueResolver;
 import lombok.val;
@@ -22,14 +21,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * @since 7.3.0
  */
 @Tag("OIDCWeb")
-public class OidcFederationDefaultJsonWebKeystoreServiceTests {
+class OidcFederationDefaultJsonWebKeystoreServiceTests {
 
     @Nested
-    @TestPropertySource(properties = {
-        "CasFeatureModule.OpenIDConnect.federation.enabled=true",
-        "cas.authn.oidc.federation.jwks-file=file:${#systemProperties['java.io.tmpdir']}/corrupted.jwks"
-    })
-    class KeystoreCorrupted extends AbstractOidcTests {
+    @TestPropertySource(properties = "cas.authn.oidc.federation.jwks-file=file:${#systemProperties['java.io.tmpdir']}/corrupted.jwks")
+    class KeystoreCorrupted extends AbstractOidcFederationTests {
         @Autowired
         @Qualifier(OidcFederationJsonWebKeystoreService.BEAN_NAME)
         private OidcFederationJsonWebKeystoreService oidcFederationWebKeystoreService;
@@ -48,11 +44,8 @@ public class OidcFederationDefaultJsonWebKeystoreServiceTests {
     }
 
     @Nested
-    @TestPropertySource(properties = {
-        "CasFeatureModule.OpenIDConnect.federation.enabled=true",
-        "cas.authn.oidc.federation.jwks-file=file:${#systemProperties['java.io.tmpdir']}/keystore-missing.jwks"
-    })
-    class KeystoreMissing extends AbstractOidcTests {
+    @TestPropertySource(properties = "cas.authn.oidc.federation.jwks-file=file:${#systemProperties['java.io.tmpdir']}/keystore-missing.jwks")
+    class KeystoreMissing extends AbstractOidcFederationTests {
         @Autowired
         @Qualifier(OidcFederationJsonWebKeystoreService.BEAN_NAME)
         private OidcFederationJsonWebKeystoreService oidcFederationWebKeystoreService;

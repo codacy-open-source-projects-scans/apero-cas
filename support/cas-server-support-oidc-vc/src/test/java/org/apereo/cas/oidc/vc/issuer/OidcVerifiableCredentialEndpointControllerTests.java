@@ -27,6 +27,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -45,6 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @since 8.0.0
  */
 @Tag("OIDCWeb")
+@Execution(ExecutionMode.SAME_THREAD)
 class OidcVerifiableCredentialEndpointControllerTests {
 
     @ImportAutoConfiguration(CasOidcVerifiableCredentialsAutoConfiguration.class)
@@ -115,12 +118,16 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            val nonce = oidcVerifiableCredentialNonceService.create().value();
+            assertNotNull(nonce);
+            assertTrue(oidcVerifiableCredentialNonceService.exists(nonce), "Nonce should exist immediately after creation");
+
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(UUID.randomUUID().toString())
                 .audience(audience)
                 .subject("casuser")
                 .issueTime(issuedAt)
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .build();
             val signedJwt = new SignedJWT(header, claims);
             signedJwt.sign(new RSASSASigner(holderKey));
@@ -132,12 +139,16 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(algorithm)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            val nonce = oidcVerifiableCredentialNonceService.create().value();
+            assertNotNull(nonce);
+            assertTrue(oidcVerifiableCredentialNonceService.exists(nonce), "Nonce should exist immediately after creation");
+
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(UUID.randomUUID().toString())
                 .audience(audience)
                 .subject("casuser")
                 .issueTime(issuedAt)
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .build();
             val signedJwt = new SignedJWT(header, claims);
             signedJwt.sign(new ECDSASigner(holderKey));
@@ -736,11 +747,12 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.ES384)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            var nonce = oidcVerifiableCredentialNonceService.create().value();
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(UUID.randomUUID().toString())
                 .audience(CREDENTIAL_ISSUER)
                 .subject("casuser")
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .issueTime(new Date())
                 .build();
             val signedJwt = new SignedJWT(header, claims);
@@ -762,11 +774,12 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            var nonce = oidcVerifiableCredentialNonceService.create().value();
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(jwtId)
                 .audience(CREDENTIAL_ISSUER)
                 .subject("testsubject")
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .issueTime(new Date())
                 .build();
             val signedJwt = new SignedJWT(header, claims);
@@ -849,12 +862,13 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            var nonce = oidcVerifiableCredentialNonceService.create().value();
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(UUID.randomUUID().toString())
                 .audience(List.of("https://other.example.org", CREDENTIAL_ISSUER))
                 .subject("casuser")
                 .issueTime(new Date())
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .build();
             val signedJwt = new SignedJWT(header, claims);
             signedJwt.sign(new RSASSASigner(holderKey));
@@ -937,11 +951,12 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            var nonce = oidcVerifiableCredentialNonceService.create().value();
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(UUID.randomUUID().toString())
                 .audience(CREDENTIAL_ISSUER)
                 .issueTime(new Date())
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .build();
             val signedJwt = new SignedJWT(header, claims);
             signedJwt.sign(new RSASSASigner(holderKey));
@@ -961,10 +976,11 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            var nonce = oidcVerifiableCredentialNonceService.create().value();
             val claims = new JWTClaimsSet.Builder()
                 .audience(CREDENTIAL_ISSUER)
                 .subject("casuser")
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .issueTime(new Date())
                 .build();
             val signedJwt = new SignedJWT(header, claims);
@@ -1059,11 +1075,12 @@ class OidcVerifiableCredentialEndpointControllerTests {
             val header = new JWSHeader.Builder(JWSAlgorithm.ES512)
                 .jwk(holderKey.toPublicJWK())
                 .build();
+            var nonce = oidcVerifiableCredentialNonceService.create().value();
             val claims = new JWTClaimsSet.Builder()
                 .jwtID(UUID.randomUUID().toString())
                 .audience(CREDENTIAL_ISSUER)
                 .subject("casuser")
-                .claim("nonce", oidcVerifiableCredentialNonceService.create().value())
+                .claim("nonce", nonce)
                 .issueTime(new Date())
                 .build();
             val signedJwt = new SignedJWT(header, claims);

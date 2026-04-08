@@ -1,7 +1,6 @@
 package org.apereo.cas.oidc.federation;
 
 import module java.base;
-import org.apereo.cas.oidc.AbstractOidcTests;
 import org.apereo.cas.oidc.OidcConstants;
 import com.nimbusds.oauth2.sdk.GrantType;
 import com.nimbusds.oauth2.sdk.ResponseType;
@@ -24,7 +23,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.test.context.TestPropertySource;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -37,11 +35,7 @@ import static org.mockito.Mockito.*;
 @Tag("OIDCWeb")
 class OidcFederationDefaultTrustChainResolverTests {
 
-    @TestPropertySource(properties = {
-        "CasFeatureModule.OpenIDConnect.federation.enabled=true",
-        "cas.authn.oidc.federation.jwks-file=file:${#systemProperties['java.io.tmpdir']}/federation.jwks"
-    })
-    abstract static class BaseTests extends AbstractOidcTests {
+    abstract static class BaseTests extends AbstractOidcFederationTests {
         @Autowired
         @Qualifier(OidcFederationTrustChainResolver.BEAN_NAME)
         protected OidcFederationTrustChainResolver oidcFederationTrustChainResolver;

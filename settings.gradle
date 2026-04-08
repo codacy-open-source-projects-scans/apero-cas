@@ -3,7 +3,7 @@
  */
 plugins {
     id "com.gradle.develocity" version "4.4.0"
-    id "com.gradle.common-custom-user-data-gradle-plugin" version "2.4.0"
+    id "com.gradle.common-custom-user-data-gradle-plugin" version "2.5.0"
     id "org.gradle.toolchains.foojay-resolver-convention" version "1.0.0"
 }
 
@@ -363,6 +363,7 @@ include "support:cas-server-support-oauth-webflow"
 include "support:cas-server-support-oidc"
 include "support:cas-server-support-oidc-core-api"
 include "support:cas-server-support-oidc-core"
+include "support:cas-server-support-oidc-federation"
 include "support:cas-server-support-oidc-jpa"
 include "support:cas-server-support-oidc-mongo"
 include "support:cas-server-support-oidc-services"
