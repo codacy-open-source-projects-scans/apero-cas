@@ -8,6 +8,7 @@ import org.apereo.cas.mfa.simple.CasSimpleMultifactorAuthenticationConstants;
 import org.apereo.cas.mfa.simple.CasSimpleMultifactorTokenCredential;
 import org.apereo.cas.mfa.simple.ticket.CasSimpleMultifactorAuthenticationTicket;
 import org.apereo.cas.mfa.simple.ticket.CasSimpleMultifactorAuthenticationTicketFactory;
+import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.ticket.TicketFactory;
 import org.apereo.cas.ticket.registry.TicketRegistry;
 import org.apereo.cas.util.CollectionUtils;
@@ -30,7 +31,7 @@ public class DefaultCasSimpleMultifactorAuthenticationService extends BaseCasSim
 
     protected final TicketFactory ticketFactory;
     protected final BucketConsumer bucketConsumer;
-    protected final ObjectProvider<@NonNull CasSimpleMultifactorAuthenticationAccountService> accountServiceProvider;
+    protected final ObjectProvider<CasSimpleMultifactorAuthenticationAccountService> accountServiceProvider;
 
     public DefaultCasSimpleMultifactorAuthenticationService(
         @NonNull
@@ -38,7 +39,7 @@ public class DefaultCasSimpleMultifactorAuthenticationService extends BaseCasSim
         @NonNull
         final TicketFactory ticketFactory,
         @NonNull
-        final ObjectProvider<@NonNull CasSimpleMultifactorAuthenticationAccountService> accountServiceProvider,
+        final ObjectProvider<CasSimpleMultifactorAuthenticationAccountService> accountServiceProvider,
         @NonNull
         final BucketConsumer bucketConsumer) {
         super(ticketRegistry);
@@ -63,18 +64,15 @@ public class DefaultCasSimpleMultifactorAuthenticationService extends BaseCasSim
     }
 
     @Override
-    public void store(final CasSimpleMultifactorAuthenticationTicket token) {
+    public Ticket store(final CasSimpleMultifactorAuthenticationTicket token) throws Exception {
         token.update();
         val trackingToken = ticketRegistry.getTicket(token.getId());
-        FunctionUtils.doUnchecked(us -> {
-            if (trackingToken != null) {
-                LOGGER.debug("Updating existing token [{}] to registry", token.getId());
-                ticketRegistry.updateTicket(trackingToken);
-            } else {
-                LOGGER.debug("Adding token [{}] to registry", token.getId());
-                ticketRegistry.addTicket(token);
-            }
-        });
+        if (trackingToken != null) {
+            LOGGER.debug("Updating existing token [{}] to registry", token.getId());
+            return Objects.requireNonNull(ticketRegistry.updateTicket(token), () -> "Unable to update token " + token.getId());
+        }
+        LOGGER.debug("Adding token [{}] to registry", token.getId());
+        return Objects.requireNonNull(ticketRegistry.addTicket(token), () -> "Unable to add token " + token.getId());
     }
 
     @Override

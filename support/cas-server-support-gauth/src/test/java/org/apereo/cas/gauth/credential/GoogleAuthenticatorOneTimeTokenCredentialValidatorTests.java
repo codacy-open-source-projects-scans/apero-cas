@@ -73,6 +73,7 @@ class GoogleAuthenticatorOneTimeTokenCredentialValidatorTests {
     void verifyStore() {
         val token = new GoogleAuthenticatorToken(632435, "casuser");
         assertDoesNotThrow(() -> validator.store(token));
+        assertThrows(IllegalArgumentException.class, () -> validator.store(token));
     }
 
     @Test
@@ -82,6 +83,7 @@ class GoogleAuthenticatorOneTimeTokenCredentialValidatorTests {
 
         val cred = new GoogleAuthenticatorTokenCredential("123456", acct.getId());
         assertNotNull(validator.validate(CoreAuthenticationTestUtils.getAuthentication(acct.getUsername()), cred));
+        assertNotNull(googleAuthenticatorAccountRegistry.get(acct.getId()).getLastUsedDateTime());
     }
 
     @Test
@@ -92,18 +94,21 @@ class GoogleAuthenticatorOneTimeTokenCredentialValidatorTests {
         val cred = new GoogleAuthenticatorTokenCredential("834251", acct.getId());
         assertNotNull(validator.validate(CoreAuthenticationTestUtils.getAuthentication(acct.getUsername()), cred));
         assertTrue(googleAuthenticatorAccountRegistry.get(acct.getId()).getScratchCodes().isEmpty());
+        assertNotNull(googleAuthenticatorAccountRegistry.get(acct.getId()).getLastUsedDateTime());
     }
 
     @Test
     void verifyTokenReuse() {
+        val userId = UUID.randomUUID().toString();
         val acct = getOneTimeTokenAccount();
+        acct.setUsername(userId);
         googleAuthenticatorAccountRegistry.save(acct);
 
-        val otp1 = new OneTimeToken(556644, "casuser");
-        oneTimeTokenAuthenticatorTokenRepository.store(otp1);
+        val otp1 = new OneTimeToken(556644, userId);
+        assertNotNull(oneTimeTokenAuthenticatorTokenRepository.store(otp1));
         assertThrows(AccountExpiredException.class,
-            () -> validator.validate(CoreAuthenticationTestUtils.getAuthentication("casuser"),
-                new GoogleAuthenticatorTokenCredential("556644", 123456L)));
+            () -> validator.validate(CoreAuthenticationTestUtils.getAuthentication(userId),
+                new GoogleAuthenticatorTokenCredential("556644", acct.getId())));
     }
 
     @Test

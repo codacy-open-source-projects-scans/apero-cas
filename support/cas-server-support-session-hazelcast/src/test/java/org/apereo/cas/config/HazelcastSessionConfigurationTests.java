@@ -9,8 +9,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -25,12 +23,11 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @SpringBootTestAutoConfigurations
 @SpringBootTest(classes = CasHazelcastSessionAutoConfiguration.class, properties = {
-    "cas.webflow.session.server.hazelcast.cluster.network.port-auto-increment=false",
     "cas.webflow.session.server.hazelcast.cluster.network.port=5709",
+    "cas.webflow.session.server.hazelcast.cluster.network.tcpip-enabled=false",
     "cas.webflow.session.server.hazelcast.cluster.core.instance-name=hzsessioninstance"
 })
 @Tag("Hazelcast")
-@Execution(ExecutionMode.SAME_THREAD)
 @ExtendWith(CasTestExtension.class)
 class HazelcastSessionConfigurationTests {
     @Autowired

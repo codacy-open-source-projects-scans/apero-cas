@@ -18,7 +18,7 @@ async function initializeHotKeyOperations() {
             openRegisteredServiceWizardDialog();
             break;
         case "n":
-            if (currentActiveTab === Tabs.CONFIGURATION.index && mutablePropertySourcesAvailable) {
+            if (currentActiveTab === Tabs.CONFIGURATION.index && PalantirDashboardConfiguration.mutablePropertySourcesAvailable()) {
                 event.preventDefault();
                 $("#newConfigPropertyButton:visible").click();
             }
@@ -35,9 +35,33 @@ async function initializeHotKeyOperations() {
                 event.preventDefault();
                 $("#newAuthenticationHandlerButton:visible").click();
             }
-            if (currentActiveTab === Tabs.PERSON_DIRECTORY.index && $("#attributeDefinitionsTab").is(":visible")) {
+            if (currentActiveTab === Tabs.PERSON_DIRECTORY.index && $("#attributedefinitions-tab").is(":visible")) {
                 event.preventDefault();
                 $("#newAttributeDefinitionButton:visible").click();
+            }
+            if (currentActiveTab === Tabs.PERSON_DIRECTORY.index && $("#attributerepositories-tab").is(":visible")) {
+                const newAttributeRepositoryButton = $("#newAttributeRepositoryButton:visible");
+                if (newAttributeRepositoryButton.length > 0) {
+                    event.preventDefault();
+                    newAttributeRepositoryButton.click();
+                }
+            }
+            if (currentActiveTab === Tabs.MULTITENANCY.index && $("#registeredTenantsTab").is(":visible")) {
+                event.preventDefault();
+                $("#newTenantButton:visible").click();
+            }
+            if (currentActiveTab === Tabs.ACCESS_STRATEGY.index
+                && $("#heimdall-tab").is(":visible")
+                && $("#newHeimdallResourceDialog").length === 0) {
+                const newResourceButton = $("#newHeimdallResourceButton:visible");
+                if (newResourceButton.length > 0) {
+                    event.preventDefault();
+                    newResourceButton.click();
+                }
+            }
+            if (currentActiveTab === Tabs.APPLICATIONS.index) {
+                event.preventDefault();
+                openRegisteredServiceWizardDialog();
             }
             
             break;

@@ -13,14 +13,16 @@ import org.apereo.cas.config.CasCoreUtilAutoConfiguration;
 import org.apereo.cas.config.CasCoreWebAutoConfiguration;
 import org.apereo.cas.config.CasPersonDirectoryAutoConfiguration;
 import org.apereo.cas.test.CasTestExtension;
-import org.apereo.cas.ticket.registry.TicketRegistry;
+import org.apereo.cas.ticket.TicketCatalog;
+import org.apereo.cas.ticket.registry.DefaultTicketRegistry;
 import org.apereo.cas.ticket.registry.pubsub.QueueableTicketRegistry;
 import org.apereo.cas.ticket.serialization.TicketSerializationManager;
 import org.apereo.cas.util.spring.boot.SpringBootTestAutoConfigurations;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.amqp.autoconfigure.RabbitAutoConfiguration;
+import org.springframework.boot.amqp.rabbitmq.autoconfigure.AmqpRabbitAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ConfigurableApplicationContext;
 
@@ -32,7 +34,7 @@ import org.springframework.context.ConfigurableApplicationContext;
  */
 @SpringBootTestAutoConfigurations
 @SpringBootTest(classes = {
-    RabbitAutoConfiguration.class,
+    AmqpRabbitAutoConfiguration.class,
     CasAMQPTicketRegistryAutoConfiguration.class,
     CasCoreTicketsAutoConfiguration.class,
     CasCoreLogoutAutoConfiguration.class,
@@ -46,23 +48,30 @@ import org.springframework.context.ConfigurableApplicationContext;
     CasCoreWebAutoConfiguration.class
 },
     properties = {
-        "spring.rabbitmq.host=localhost",
-        "spring.rabbitmq.port=5672",
-        "spring.rabbitmq.username=rabbituser",
-        "spring.rabbitmq.password=bugsbunny",
+        "spring.amqp.rabbitmq.host=localhost",
+        "spring.amqp.rabbitmq.port=5672",
+        "spring.amqp.rabbitmq.username=rabbituser",
+        "spring.amqp.rabbitmq.password=bugsbunny",
         "cas.ticket.registry.in-memory.crypto.signing.key=HbuPoSycjr0Pyv2u8WSwKcM6Ow0lviUdT7b9VzwxkcANqbDyKOb6KHPus_fCDCXElPhzXpeP-T0bryadZNiwOQ",
         "cas.ticket.registry.in-memory.crypto.encryption.key=BXRiSBWJcRksTizjdaCoLw"
     })
 @ExtendWith(CasTestExtension.class)
 public abstract class AbstractTicketMessageQueueCommandTests {
     @Autowired
-    @Qualifier(TicketRegistry.BEAN_NAME)
-    protected QueueableTicketRegistry ticketRegistry;
-
-    @Autowired
     @Qualifier(TicketSerializationManager.BEAN_NAME)
     protected TicketSerializationManager ticketSerializationManager;
 
     @Autowired
+    @Qualifier(TicketCatalog.BEAN_NAME)
+    protected TicketCatalog ticketCatalog;
+
+    @Autowired
     protected ConfigurableApplicationContext applicationContext;
+
+    protected QueueableTicketRegistry ticketRegistry;
+
+    @BeforeEach
+    void initializeTicketRegistry() {
+        ticketRegistry = new DefaultTicketRegistry(ticketSerializationManager, ticketCatalog, applicationContext);
+    }
 }

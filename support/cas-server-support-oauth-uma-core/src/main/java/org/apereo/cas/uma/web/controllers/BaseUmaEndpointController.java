@@ -16,7 +16,6 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
-import org.jspecify.annotations.NonNull;
 import org.pac4j.core.profile.UserProfile;
 import org.pac4j.jee.context.JEEContext;
 import org.springframework.http.HttpStatus;
@@ -53,11 +52,11 @@ public abstract class BaseUmaEndpointController extends AbstractController {
         return profile;
     }
 
-    protected MultiValueMap<@NonNull String, Object> buildResponseEntityErrorModel(final InvalidResourceSetException e) {
+    protected MultiValueMap<String, Object> buildResponseEntityErrorModel(final InvalidResourceSetException e) {
         return buildResponseEntityErrorModel(e.getStatus(), e.getMessage());
     }
 
-    protected MultiValueMap<@NonNull String, Object> buildResponseEntityErrorModel(final HttpStatus code, final String message) {
+    protected MultiValueMap<String, Object> buildResponseEntityErrorModel(final HttpStatus code, final String message) {
         return CollectionUtils.asMultiValueMap("code",
             code.value(),
             "message", message);
@@ -65,6 +64,11 @@ public abstract class BaseUmaEndpointController extends AbstractController {
 
     protected OAuth20AccessToken resolveAccessToken(final Ticket token) {
         return (OAuth20AccessToken) (token.isStateless() ? umaConfigurationContext.getTicketRegistry().getTicket(token.getId()) : token);
+    }
+
+    protected Optional<ResourceSet> getResourceSet(final long id, final UserProfile profile) {
+        val clientId = Objects.requireNonNull(OAuth20Utils.getClientIdFromAuthenticatedProfile(profile));
+        return umaConfigurationContext.getUmaResourceSetRepository().getById(id, clientId, profile.getId());
     }
 
     protected String getResourceSetUriLocation(final ResourceSet saved) {

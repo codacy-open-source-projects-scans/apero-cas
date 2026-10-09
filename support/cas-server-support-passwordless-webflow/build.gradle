@@ -1,4 +1,6 @@
-description = "Apereo CAS Passwordless Authentication Webflow Support"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Adds browser login flow screens for passwordless authentication."
 ext {
     publishMetadata = true
     projectMetadata = [
@@ -37,6 +39,10 @@ dependencies {
     implementation project(":support:cas-server-support-captcha-core")
 
     compileOnly project(":support:cas-server-support-pac4j-webflow")
+    compileOnly project(":support:cas-server-support-pac4j-oidc")
+
+    compileOnly libraries.pac4joidcoauth
+    testImplementation libraries.pac4joidcoauth
 
     testImplementation project(":core:cas-server-core-cookie")
     testImplementation project(":core:cas-server-core-util")
@@ -53,6 +59,7 @@ dependencies {
     testImplementation project(":core:cas-server-core-scripting")
     
     testImplementation project(":support:cas-server-support-pac4j-cas")
+    testImplementation project(":support:cas-server-support-pac4j-oidc")
     testImplementation project(":support:cas-server-support-pac4j-webflow")
     testImplementation project(":support:cas-server-support-themes")
     testImplementation project(":support:cas-server-support-saml-core")

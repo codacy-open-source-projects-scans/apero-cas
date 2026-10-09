@@ -16,6 +16,7 @@ import org.apereo.cas.authentication.principal.PrincipalFactoryUtils;
 import org.apereo.cas.authentication.principal.PrincipalResolver;
 import org.apereo.cas.configuration.CasConfigurationProperties;
 import org.apereo.cas.configuration.features.CasFeatureModule;
+import org.apereo.cas.configuration.model.support.mfa.webauthn.WebAuthnMultifactorAttestationTrustSourceFidoProperties;
 import org.apereo.cas.logout.SessionTerminationHandler;
 import org.apereo.cas.services.ServicesManager;
 import org.apereo.cas.ticket.TicketFactory;
@@ -42,8 +43,10 @@ import org.apereo.cas.webauthn.storage.JsonResourceWebAuthnCredentialRepository;
 import org.apereo.cas.webauthn.storage.WebAuthnCredentialRepository;
 import org.apereo.cas.webauthn.web.BaseWebAuthnController;
 import org.apereo.cas.webauthn.web.WebAuthnController;
+import org.apereo.cas.webauthn.web.WebAuthnPasskeyEndpointsController;
 import org.apereo.cas.webauthn.web.WebAuthnQRCodeController;
 import org.apereo.cas.webauthn.web.WebAuthnRegisteredDevicesEndpoint;
+import org.apereo.cas.webauthn.web.WebAuthnRelatedOriginsController;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.yubico.core.DefaultSessionManager;
 import com.yubico.core.InMemoryRegistrationStorage;
@@ -56,6 +59,7 @@ import com.yubico.data.AssertionRequestWrapper;
 import com.yubico.data.RegistrationRequest;
 import com.yubico.fido.metadata.FidoMetadataDownloader;
 import com.yubico.fido.metadata.FidoMetadataService;
+import com.yubico.fido.metadata.MetadataBLOB;
 import com.yubico.webauthn.RelyingParty;
 import com.yubico.webauthn.attestation.AttestationTrustSource;
 import com.yubico.webauthn.attestation.MetadataObject;
@@ -110,7 +114,6 @@ class WebAuthnConfiguration {
         @Bean
         @ConditionalOnMissingBean(name = "webAuthnMetadataService")
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
-        @Lazy(false)
         public AttestationTrustSource webAuthnMetadataService(
             final ConfigurableApplicationContext applicationContext,
             final CasConfigurationProperties casProperties) {
@@ -156,7 +159,7 @@ class WebAuthnConfiguration {
 
                         LOGGER.debug("Starting to refresh/download FIDO metadata blob from [{}] and caching it at [{}]",
                             fidoProperties.getMetadataBlobUrl(), fidoProperties.getBlobCacheFile());
-                        val blob = downloader.refreshBlob();
+                        val blob = refreshFidoMetadataBlob(downloader, fidoProperties);
                         val fidoService = FidoMetadataService.builder()
                             .useBlob(blob)
                             .build();
@@ -166,6 +169,30 @@ class WebAuthnConfiguration {
                 }))
                 .otherwiseProxy()
                 .get();
+        }
+        /**
+         * Download the FIDO metadata BLOB, falling back to the cached copy when the download fails, for example when
+         * the metadata service rate-limits the request. The cached copy is only used while it is still valid; without
+         * a usable cache the failure is raised as before.
+         *
+         * @param downloader     the downloader
+         * @param fidoProperties the FIDO trust source settings
+         * @return the metadata BLOB
+         * @throws Exception when neither a download nor the cache yields a valid BLOB
+         */
+        private static MetadataBLOB refreshFidoMetadataBlob(final FidoMetadataDownloader downloader,
+                                                            final WebAuthnMultifactorAttestationTrustSourceFidoProperties fidoProperties) throws Exception {
+            try {
+                return downloader.refreshBlob();
+            } catch (final IOException e) {
+                val cacheFile = fidoProperties.getBlobCacheFile();
+                if (cacheFile == null || cacheFile.length() <= 0) {
+                    throw e;
+                }
+                LOGGER.warn("Unable to download FIDO metadata blob from [{}]: [{}]. Using the cached blob at [{}]",
+                    fidoProperties.getMetadataBlobUrl(), e.getMessage(), cacheFile);
+                return downloader.loadCachedBlob();
+            }
         }
     }
 
@@ -219,10 +246,10 @@ class WebAuthnConfiguration {
         public Cleanable webAuthnDeviceRepositoryCleanerScheduler(
             final ConfigurableApplicationContext applicationContext,
             @Qualifier(WebAuthnCredentialRepository.BEAN_NAME)
-            final WebAuthnCredentialRepository webAuthnCredentialRepository) {
+            final ObjectProvider<WebAuthnCredentialRepository> webAuthnCredentialRepository) {
             return BeanSupplier.of(Cleanable.class)
                 .when(BeanCondition.on("cas.authn.mfa.web-authn.cleaner.schedule.enabled").isTrue().evenIfMissing().given(applicationContext.getEnvironment()))
-                .supply(() -> new WebAuthnDeviceRepositoryCleanerScheduler(webAuthnCredentialRepository))
+                .supply(() -> new WebAuthnDeviceRepositoryCleanerScheduler(webAuthnCredentialRepository.getObject()))
                 .otherwiseProxy()
                 .get();
         }
@@ -282,16 +309,11 @@ class WebAuthnConfiguration {
             val serverName = casProperties.getServer().getName();
             val defaultRelyingPartyId = RelyingPartyIdentity
                 .builder()
-                .id(StringUtils.defaultIfBlank(webAuthn.getRelyingPartyId(), new URI(serverName).toURL().getHost()))
+                .id(WebAuthnUtils.determineRelyingPartyId(casProperties))
                 .name(StringUtils.defaultIfBlank(webAuthn.getRelyingPartyName(), "CAS"))
                 .build();
 
-            val origins = new LinkedHashSet<String>();
-            origins.add(serverName);
-            if (StringUtils.isNotBlank(webAuthn.getAllowedOrigins())) {
-                origins.addAll(org.springframework.util.StringUtils.commaDelimitedListToSet(webAuthn.getAllowedOrigins()));
-            }
-
+            val origins = WebAuthnUtils.determineAllowedOrigins(casProperties);
             val conveyance = AttestationConveyancePreference.valueOf(webAuthn.getAttestationConveyancePreference().toUpperCase(Locale.ENGLISH));
             val appId = new AppId(StringUtils.defaultIfBlank(webAuthn.getApplicationId(), serverName));
             val relyingParty = RelyingParty.builder()
@@ -439,12 +461,13 @@ class WebAuthnConfiguration {
         @Bean
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public MultifactorAuthenticationDeviceManager webAuthnMultifactorAuthenticationDeviceManager(
+            final CasConfigurationProperties casProperties,
             @Qualifier("webAuthnMultifactorAuthenticationProvider")
             final ObjectProvider<MultifactorAuthenticationProvider> webAuthnMultifactorAuthenticationProvider,
             @Qualifier("webAuthnCredentialRepository")
             final WebAuthnCredentialRepository webAuthnCredentialRepository) {
             return new WebAuthnMultifactorAuthenticationDeviceManager(
-                webAuthnCredentialRepository, webAuthnMultifactorAuthenticationProvider);
+                webAuthnCredentialRepository, webAuthnMultifactorAuthenticationProvider, WebAuthnUtils.determineRelyingPartyId(casProperties));
         }
 
         @Configuration(value = "WebAuthnMultifactorProviderConfiguration", proxyBeanMethods = false)
@@ -492,6 +515,22 @@ class WebAuthnConfiguration {
                 @Qualifier(WebAuthnCredentialRepository.BEAN_NAME)
                 final ObjectProvider<WebAuthnCredentialRepository> webAuthnCredentialRepository) {
                 return new WebAuthnRegisteredDevicesEndpoint(casProperties, applicationContext, webAuthnCredentialRepository);
+            }
+
+            @ConditionalOnMissingBean(name = "webAuthnRelatedOriginsController")
+            @Bean
+            @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
+            public WebAuthnRelatedOriginsController webAuthnRelatedOriginsController(final CasConfigurationProperties casProperties) {
+                return new WebAuthnRelatedOriginsController(WebAuthnUtils.determineAllowedOrigins(casProperties));
+            }
+
+            @ConditionalOnMissingBean(name = "webAuthnPasskeyEndpointsController")
+            @Bean
+            @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
+            public WebAuthnPasskeyEndpointsController webAuthnPasskeyEndpointsController(
+                final ConfigurableApplicationContext applicationContext,
+                final CasConfigurationProperties casProperties) {
+                return new WebAuthnPasskeyEndpointsController(casProperties);
             }
 
             @ConditionalOnMissingBean(name = "webAuthnController")
@@ -604,7 +643,13 @@ class WebAuthnConfiguration {
                                 .matcher(BaseWebAuthnController.BASE_ENDPOINT_WEBAUTHN + WebAuthnQRCodeController.ENDPOINT_QR_VERIFY + "/**");
                             customizer.requestMatchers(regEndpoints)
                                 .access(new WebExpressionAuthorizationManager("hasRole('USER') and isAuthenticated()"));
-                            customizer.requestMatchers(authEndpoints, qrAuthEndpoints).permitAll();
+                            val relatedOrigins = PathPatternRequestMatcher.withDefaults()
+                                .matcher(HttpMethod.GET, WebAuthnRelatedOriginsController.ENDPOINT_RELATED_ORIGINS);
+                            val passkeyEndpoints = PathPatternRequestMatcher.withDefaults()
+                                .matcher(HttpMethod.GET, WebAuthnPasskeyEndpointsController.ENDPOINT_PASSKEY_ENDPOINTS);
+                            val passkeyProviderIcons = PathPatternRequestMatcher.withDefaults()
+                                .matcher(HttpMethod.GET, BaseWebAuthnController.BASE_ENDPOINT_WEBAUTHN + "/passkey-providers/*/icon");
+                            customizer.requestMatchers(authEndpoints, qrAuthEndpoints, relatedOrigins, passkeyEndpoints, passkeyProviderIcons).permitAll();
                         });
                         return this;
                     }

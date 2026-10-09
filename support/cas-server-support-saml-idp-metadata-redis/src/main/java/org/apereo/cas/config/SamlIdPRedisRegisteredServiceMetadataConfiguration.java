@@ -58,7 +58,7 @@ class SamlIdPRedisRegisteredServiceMetadataConfiguration {
             .get();
     }
 
-    @Bean
+    @Bean(defaultCandidate = false)
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = "redisSamlRegisteredServiceMetadataConnectionFactory")
     public RedisConnectionFactory redisSamlRegisteredServiceMetadataConnectionFactory(

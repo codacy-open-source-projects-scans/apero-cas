@@ -1,5 +1,5 @@
 <p align="center">
-<img src="https://github.com/user-attachments/assets/c2daa28c-cdfb-42a7-8333-db967cc3cce7">
+  <img src="https://github.com/user-attachments/assets/ce80e360-4df8-4a4b-897e-6ab547e8f906" />
 </p>
 
 # Central Authentication Service (CAS)
@@ -32,12 +32,12 @@ There is no need for special ceremony to create separate issues. The pull reques
   <img src="https://contrib.rocks/image?repo=apereo/cas" alt="Contributors"/>
 </a>
 
-## Documentation [![Javadoc](https://img.shields.io/badge/Documentation-Javadoc-ff69b4.svg?style=for-the-badge&logo=readme)][casjavadocs]
+## Documentation
 
 | Version                                                                                    | Reference                                        |
 |--------------------------------------------------------------------------------------------|--------------------------------------------------|
 | ![](https://img.shields.io/badge/Development-WIP-blue.svg?style=for-the-badge&logo=github) | [Link](https://apereo.github.io/cas/development) |
-| ![](https://img.shields.io/badge/7.3.x-Current-green.svg?style=for-the-badge&logo=github)  | [Link](https://apereo.github.io/cas/7.3.x)       |
+| ![](https://img.shields.io/badge/8.0.x-Current-green.svg?style=for-the-badge&logo=github)  | [Link](https://apereo.github.io/cas/8.0.x)       |
 
 Additional resources are available as follows:
 
@@ -99,7 +99,7 @@ If you (or your employer) benefit from this project, please consider becoming a 
 Commercial support options may be [found here][cassupport].
 
 [cascodecov]: https://codecov.io/gh/apereo/cas
-[devlocity]: https://develocity.apereo.org
+[devlocity]: https://community.develocity.cloud/scans?search.rootProjectNames=cas-server
 [maintenance]: https://apereo.github.io/cas/developer/Maintenance-Policy.html
 [releaseschedule]: https://github.com/apereo/cas/milestones
 [wiki]: https://apereo.github.io/cas
@@ -114,7 +114,6 @@ Commercial support options may be [found here][cassupport].
 [blog]: https://apereo.github.io/
 [casbuildprocess]: https://apereo.github.io/cas/developer/Build-Process.html
 [githubcontributors]: https://github.com/apereo/cas/graphs/contributors
-[casjavadocs]: https://www.javadoc.io/doc/org.apereo.cas
 [apereocas]: https://www.apereo.org/projects/cas
 [springboot]: https://projects.spring.io/spring-boot/
 [springcloud]: https://projects.spring.io/spring-cloud/

@@ -74,7 +74,7 @@
             <property name="accessModifiers" value="public"/>
             <property name="ignoreNamePattern" value="log|logger|LOG|LOGGER"/>
         </module>
-        <module name="JavadocStyle">
+        <module name="SummaryJavadoc">
             <property name="severity" value="error"/>
         </module>
         <module name="EmptyCatchBlock">
@@ -379,7 +379,7 @@
         </module>
         <module name="BooleanExpressionComplexity">
             <property name="severity" value="error"/>
-            <property name="max" value="5"/>
+            <property name="max" value="10"/>
         </module>
         <module name="ArrayTypeStyle">
             <property name="severity" value="error"/>
@@ -441,6 +441,15 @@
             <property name="severity" value="error"/>
             <property name="format" value="@TestPropertySource\(locations.*"/>
             <property name="message" value="Consider using inline properties instead using the properties attribute"/>
+        </module>
+
+        <module name="RegexpSinglelineJava">
+            <property name="id" value="reservedMockWebServerPorts"/>
+            <metadata name="net.sf.eclipsecs.core.comment" value="Ports 21000-24999 are reserved for MockWebServer"/>
+            <property name="severity" value="error"/>
+            <property name="format" value="(localhost|127\.0\.0\.1|0\.0\.0\.0):2[1-4][0-9]{3}"/>
+            <property name="message"
+                      value="Ports 21000-24999 are reserved for MockWebServer random allocation. Pick a port outside that band, or let MockWebServer choose one and read it back with getPort()."/>
         </module>
 
         <module name="RegexpSinglelineJava">

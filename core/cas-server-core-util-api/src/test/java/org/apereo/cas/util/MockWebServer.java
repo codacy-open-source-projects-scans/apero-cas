@@ -29,8 +29,9 @@ import java.security.cert.X509Certificate;
  */
 @Slf4j
 public class MockWebServer implements Closeable {
-    private static final int STARTING_PORT_RANGE = 4000;
-    private static final int ENDING_PORT_RANGE = 9999;
+    private static final int STARTING_PORT_RANGE = 21000;
+
+    private static final int ENDING_PORT_RANGE = 24999;
 
     private static final ConcurrentSkipListSet<Integer> ALL_PORTS = new ConcurrentSkipListSet<>();
     private static final ObjectMapper MAPPER = JacksonObjectMapperFactory.builder()
@@ -256,6 +257,10 @@ public class MockWebServer implements Closeable {
         this.worker.setHeadersConsumer(consumer);
     }
 
+    public void requestLineConsumer(final Consumer<String> consumer) {
+        this.worker.setRequestLineConsumer(consumer);
+    }
+
     public int getRequestCount() {
         return this.worker.getRequestCounter().get();
     }
@@ -312,6 +317,8 @@ public class MockWebServer implements Closeable {
          */
         private static final int BUFFER_SIZE = 2048;
 
+        private static final long CLIENT_CLOSE_TIMEOUT_MILLIS = 200;
+
         @Getter
         private final Map<String, String> headers = new HashMap<>();
 
@@ -333,6 +340,9 @@ public class MockWebServer implements Closeable {
 
         @Setter
         private Consumer<Map<String, String>> headersConsumer;
+
+        @Setter
+        private Consumer<String> requestLineConsumer;
 
         @Getter
         private final AtomicInteger requestCounter = new AtomicInteger(0);
@@ -383,13 +393,18 @@ public class MockWebServer implements Closeable {
         }
 
         @Override
-        public synchronized void run() {
+        public void run() {
             while (this.running) {
                 try (val socket = serverSocket.accept()) {
                     val givenHeaders = new HashMap<String, String>();
                     val in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                     var line = StringUtils.EMPTY;
+                    var requestLine = true;
                     while ((line = in.readLine()) != null && !line.isEmpty()) {
+                        if (requestLine && requestLineConsumer != null) {
+                            requestLineConsumer.accept(line);
+                        }
+                        requestLine = false;
                         if (line.contains(":")) {
                             val name = line.substring(0, line.indexOf(':')).trim();
                             val value = line.substring(line.indexOf(':') + 1).trim();
@@ -409,13 +424,27 @@ public class MockWebServer implements Closeable {
                         writeResponse(socket);
                     }
                     socket.shutdownOutput();
-                    Thread.sleep(200);
+                    awaitClientClose(socket, in);
                 } catch (final SocketException e) {
                     LOGGER.debug("Stopping on socket close: [{}]", e.getMessage(), e);
                     this.running = false;
                 } catch (final Exception e) {
                     LoggingUtils.error(LOGGER, e);
                 }
+            }
+        }
+
+        private static void awaitClientClose(final Socket socket, final Reader in) {
+            try {
+                socket.setSoTimeout((int) CLIENT_CLOSE_TIMEOUT_MILLIS);
+                val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CLIENT_CLOSE_TIMEOUT_MILLIS);
+                val buffer = new char[BUFFER_SIZE];
+                var count = 0;
+                while (count > -1 && System.nanoTime() < deadline) {
+                    count = in.read(buffer);
+                }
+            } catch (final IOException e) {
+                LOGGER.trace("Stopped waiting for the client to close the connection: [{}]", e.getMessage());
             }
         }
 
@@ -441,6 +470,13 @@ public class MockWebServer implements Closeable {
                 out.write(statusLine.getBytes(StandardCharsets.UTF_8));
                 out.write(header("Content-Length", this.resource.contentLength()));
                 out.write(header(HttpHeaders.CONTENT_TYPE, this.contentType));
+                /*
+                 * This worker closes the socket once it has answered, so the connection must not be
+                 * advertised as reusable. Without this, an HTTP/1.1 client keeps it in its pool and the
+                 * next request routed to this host and port is written to a socket the server has already
+                 * closed, which surfaces as NoHttpResponseException rather than as a connection failure.
+                 */
+                out.write(header("Connection", "close"));
                 headers.forEach(Unchecked.biConsumer((key, value) -> out.write(header(key, value))));
                 out.write(SEPARATOR.getBytes(StandardCharsets.UTF_8));
 

@@ -42,6 +42,7 @@ import org.springframework.webflow.action.SetAction;
 import org.springframework.webflow.action.ViewFactoryActionAdapter;
 import org.springframework.webflow.config.FlowDefinitionRegistryBuilder;
 import org.springframework.webflow.definition.StateDefinition;
+import org.springframework.webflow.definition.TransitionDefinition;
 import org.springframework.webflow.definition.registry.FlowDefinitionRegistry;
 import org.springframework.webflow.engine.ActionList;
 import org.springframework.webflow.engine.ActionState;
@@ -93,7 +94,6 @@ import org.springframework.webflow.expression.spel.ScopeSearchingPropertyAccesso
 @ToString(of = "name")
 public abstract class AbstractCasWebflowConfigurer implements CasWebflowConfigurer {
 
-
     /**
      * Flow builder services.
      */
@@ -127,7 +127,7 @@ public abstract class AbstractCasWebflowConfigurer implements CasWebflowConfigur
 
     @Override
     public void initialize() {
-        FunctionUtils.doAndHandle(o -> {
+        FunctionUtils.doAndHandle(_ -> {
             LOGGER.trace("Initializing CAS webflow configuration...");
             if (casProperties.getWebflow().getAutoConfiguration().isEnabled()) {
                 doInitialize();
@@ -508,12 +508,12 @@ public abstract class AbstractCasWebflowConfigurer implements CasWebflowConfigur
     }
 
     @Override
-    public Transition createTransitionForState(final TransitionableState state,
-                                               final String criteriaOutcome,
-                                               final String targetState,
-                                               final boolean removeExisting,
-                                               final Map<String, Object> attributes,
-                                               final Action... actions) {
+    public @Nullable Transition createTransitionForState(final TransitionableState state,
+                                                         final String criteriaOutcome,
+                                                         final String targetState,
+                                                         final boolean removeExisting,
+                                                         final Map<String, Object> attributes,
+                                                         final Action... actions) {
         return FunctionUtils.doIfNotNull(state, () -> {
             try {
                 if (removeExisting) {
@@ -793,6 +793,10 @@ public abstract class AbstractCasWebflowConfigurer implements CasWebflowConfigur
      */
     public Mapping createFlowMapping(final String sourceExpression, final String targetExpression) {
         return createFlowMapping(sourceExpression, targetExpression, false, null);
+    }
+
+    protected static TransitionDefinition getDefaultTransitionFor(final TransitionableState state) {
+        return state.getTransition("*");
     }
 
     /**

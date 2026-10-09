@@ -40,7 +40,18 @@ class OidcVerifiableCredentialDefaultTransactionServiceTests extends AbstractOid
         assertEquals("casuser", sessionTicket.getProperty("principalId", String.class));
         assertEquals(credentialConfigIds, sessionTicket.getProperty("credentialConfigurationIds", List.class));
         assertNotNull(sessionTicket.getProperty("issuerState", String.class));
-        assertNotNull(sessionTicket.getProperty("preAuthorizedCode", String.class));
+        val preAuthorizedCode = sessionTicket.getProperty("preAuthorizedCode", String.class);
+        assertNotNull(preAuthorizedCode);
+        val preAuthorizationTicket = (TransientSessionTicket) oidcVerifiableCredentialTransactionService.fetchPreAuthorizationCode(preAuthorizedCode);
+        assertNotNull(preAuthorizationTicket);
+        assertEquals(ticket.getId(), preAuthorizationTicket.getProperty("transactionId", String.class));
+
+        val transactionCode = sessionTicket.getPropertyAsString(
+            OidcVerifiableCredentialTransactionService.PROPERTY_TRANSACTION_CODE);
+        assertNotNull(transactionCode);
+        assertNotEquals(ticket.getId(), transactionCode);
+        assertEquals(transactionCode, preAuthorizationTicket.getPropertyAsString(
+            OidcVerifiableCredentialTransactionService.PROPERTY_TRANSACTION_CODE));
     }
 
     @Test
@@ -62,6 +73,51 @@ class OidcVerifiableCredentialDefaultTransactionServiceTests extends AbstractOid
         val sessionTicket = (TransientSessionTicket) ticketRegistry.getTicket(ticket.getId());
         assertNotNull(sessionTicket);
         assertEquals(List.of(), sessionTicket.getProperty("credentialConfigurationIds", List.class));
+    }
+
+    @Test
+    void verifyPreAuthorizationCodeIsRedeemedOnlyOnce() {
+        val preAuthorizedCode = issuePreAuthorizationCode();
+        assertNotNull(oidcVerifiableCredentialTransactionService.consumePreAuthorizationCode(preAuthorizedCode));
+        assertNull(oidcVerifiableCredentialTransactionService.consumePreAuthorizationCode(preAuthorizedCode));
+        assertNull(oidcVerifiableCredentialTransactionService.fetchPreAuthorizationCode(preAuthorizedCode));
+    }
+
+    @Test
+    void verifyConcurrentRedemptionsProduceOneWinner() throws Throwable {
+        val preAuthorizedCode = issuePreAuthorizationCode();
+        val attempts = 16;
+        val barrier = new CyclicBarrier(attempts);
+        val winners = new AtomicInteger();
+        val tasks = IntStream.range(0, attempts)
+            .<Callable<Void>>mapToObj(_ -> () -> {
+                barrier.await();
+                if (oidcVerifiableCredentialTransactionService.consumePreAuthorizationCode(preAuthorizedCode) != null) {
+                    winners.incrementAndGet();
+                }
+                return null;
+            })
+            .toList();
+        try (val executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (val future : executor.invokeAll(tasks)) {
+                future.get();
+            }
+        }
+        assertEquals(1, winners.get());
+    }
+
+    @Test
+    void verifyConsumeUnknownPreAuthorizationCode() {
+        assertNull(oidcVerifiableCredentialTransactionService.consumePreAuthorizationCode("TST-unknown-code"));
+    }
+
+    private String issuePreAuthorizationCode() {
+        val registeredService = getOidcRegisteredService();
+        val ticket = oidcVerifiableCredentialTransactionService.issue(
+            registeredService.getClientId(), "casuser", List.of("VerifiableCredential"));
+        assertNotNull(ticket);
+        val sessionTicket = (TransientSessionTicket) ticketRegistry.getTicket(ticket.getId());
+        return Objects.requireNonNull(sessionTicket.getProperty("preAuthorizedCode", String.class));
     }
 
     @Test

@@ -26,7 +26,6 @@ import net.shibboleth.shared.resolver.CriteriaSet;
 import org.apache.commons.lang3.ClassUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.StopWatch;
-import org.jspecify.annotations.NonNull;
 import org.opensaml.saml.common.xml.SAMLConstants;
 import org.opensaml.saml.criterion.EntityRoleCriterion;
 import org.opensaml.saml.ext.saml2mdui.UIInfo;
@@ -61,7 +60,7 @@ import org.springframework.beans.factory.ObjectProvider;
 @Slf4j
 public class DelegatedClientSaml2Builder implements ConfigurableDelegatedClientBuilder {
     protected final CasSSLContext casSslContext;
-    protected final ObjectProvider<@NonNull SAMLMessageStoreFactory> samlMessageStoreFactory;
+    protected final ObjectProvider<SAMLMessageStoreFactory> samlMessageStoreFactory;
     protected final OpenSamlConfigBean configBean;
 
     @Override
@@ -88,12 +87,12 @@ public class DelegatedClientSaml2Builder implements ConfigurableDelegatedClientB
 
                 val configuration = new SAML2Configuration(keystorePath, saml.getKeystorePassword(),
                     saml.getPrivateKeyPassword(), identityProviderMetadataPath);
-                configuration.setForceKeystoreGeneration(saml.isForceKeystoreGeneration());
+                configuration.getKeystore().setForceKeystoreGeneration(saml.isForceKeystoreGeneration());
 
                 FunctionUtils.doIf(saml.getCertificateExpirationDays() > 0,
-                    _ -> configuration.setCertificateExpirationPeriod(Period.ofDays(saml.getCertificateExpirationDays()))).accept(saml);
+                    _ -> configuration.getKeystore().setCertificateExpirationPeriod(Period.ofDays(saml.getCertificateExpirationDays()))).accept(saml);
                 FunctionUtils.doIfNotNull(saml.getResponseBindingType(), configuration::setResponseBindingType);
-                FunctionUtils.doIfNotNull(saml.getCertificateSignatureAlg(), configuration::setCertificateSignatureAlg);
+                FunctionUtils.doIfNotNull(saml.getCertificateSignatureAlg(), alg -> configuration.getKeystore().setCertificateSignatureAlg(alg));
 
                 configuration.setPartialLogoutTreatedAsSuccess(saml.isPartialLogoutAsSuccess());
                 configuration.setResponseDestinationAttributeMandatory(saml.isResponseDestinationMandatory());
@@ -103,7 +102,7 @@ public class DelegatedClientSaml2Builder implements ConfigurableDelegatedClientB
                 FunctionUtils.doIfNotBlank(saml.getSingleLogoutServiceUrl(), _ -> configuration.setSingleSignOutServiceUrl(saml.getSingleLogoutServiceUrl()));
                 FunctionUtils.doIfNotBlank(saml.getLogoutResponseBindingType(), _ -> configuration.setSpLogoutResponseBindingType(saml.getLogoutResponseBindingType()));
 
-                configuration.setCertificateNameToAppend(StringUtils.defaultIfBlank(saml.getCertificateNameToAppend(), saml.getClientName()));
+                configuration.getKeystore().setCertificateNameToAppend(StringUtils.defaultIfBlank(saml.getCertificateNameToAppend(), saml.getClientName()));
                 configuration.setMaximumAuthenticationLifetime(Beans.newDuration(saml.getMaximumAuthenticationLifetime()).toSeconds());
                 val serviceProviderEntityId = SpringExpressionLanguageValueResolver.getInstance().resolve(saml.getServiceProviderEntityId());
                 configuration.setServiceProviderEntityId(serviceProviderEntityId);
@@ -267,6 +266,7 @@ public class DelegatedClientSaml2Builder implements ConfigurableDelegatedClientB
         DelegatedIdentityProviderFactory.configureClientName(singleClient, clientName);
         DelegatedIdentityProviderFactory.configureClientCustomProperties(singleClient, saml2Properties);
         DelegatedIdentityProviderFactory.configureClientCallbackUrl(singleClient, saml2Properties, properties.getServer().getLoginUrl());
+        DelegatedIdentityProviderFactory.configureLogoutPropagation(singleClient, saml2Properties);
         singleClient.getCustomProperties().put(ClientCustomPropertyConstants.CLIENT_CUSTOM_PROPERTY_IDENTITY_PROVIDER_METADATA_AGGREGATE, true);
 
         val idpSSODescriptor = entityDescriptor.getIDPSSODescriptor(SAMLConstants.SAML20P_NS);

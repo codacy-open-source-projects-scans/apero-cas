@@ -75,6 +75,7 @@ public class UniversalPromptDuoSecurityAuthenticationService extends BaseDuoSecu
         collectDuoAttribute(attributes, "duoSub", CollectionUtils.wrap(result.getSub()));
         collectDuoAttribute(attributes, "duoPreferredUsername", CollectionUtils.wrap(result.getPreferred_username()));
         collectDuoAttribute(attributes, "duoAud", CollectionUtils.wrap(result.getAud()));
+        collectDuoAttribute(attributes, "duoAmr", CollectionUtils.wrap(result.getAmr()));
         return attributes;
     }
 
@@ -146,7 +147,9 @@ public class UniversalPromptDuoSecurityAuthenticationService extends BaseDuoSecu
     }
 
     protected String getDuoPrincipalId(final DuoSecurityUniversalPromptCredential duoCredential) {
-        val principal = resolvePrincipal(duoCredential.getAuthentication().getPrincipal());
+        val authentication = Objects.requireNonNull(duoCredential.getAuthentication(),
+            "Duo Security credential does not carry the first-factor authentication");
+        val principal = resolvePrincipal(authentication.getPrincipal());
         val principalAttribute = properties.getPrincipalAttribute();
         if (StringUtils.isNotBlank(principalAttribute) && principal.getAttributes().containsKey(principalAttribute)) {
             return principal.getAttributes().get(principalAttribute).getFirst().toString();

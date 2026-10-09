@@ -19,8 +19,6 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -44,12 +42,12 @@ import static org.junit.jupiter.api.Assertions.*;
     "cas.ticket.registry.cosmos-db.key=${#environmentVariables['COSMOS_DB_KEY']}",
     "cas.ticket.registry.cosmos-db.database=CasTicketRegistryDb",
     "cas.ticket.registry.cosmos-db.database-throughput=1000",
-    "cas.ticket.registry.cosmos-db.max-retry-attempts-on-throttled-requests=5",
+    "cas.ticket.registry.cosmos-db.max-retry-attempts-on-throttled-requests=10",
+    "cas.ticket.registry.cosmos-db.max-retry-wait-time=PT60S",
     "cas.ticket.registry.cosmos-db.indexing-mode=CONSISTENT"
 })
 @ResourceLock("cosmosdb-tickets")
 @Getter
-@Execution(ExecutionMode.SAME_THREAD)
 @EnabledIfEnvironmentVariable(named = "COSMOS_DB_URL", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "COSMOS_DB_KEY", matches = ".+")
 @Deprecated(since = "8.0.0", forRemoval = true)

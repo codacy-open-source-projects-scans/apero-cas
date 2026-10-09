@@ -1,11 +1,15 @@
 package org.apereo.cas.oidc.vc.issuer.metadata;
 
 import module java.base;
+import org.apereo.cas.configuration.model.support.oidc.OidcVerifiableCredentialConfigurationProperties.CredentialConfigurationFormats;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.SuperBuilder;
+import lombok.extern.jackson.Jacksonized;
 
 /**
  * This is {@link OidcCredentialIssuerMetadata}.
@@ -13,7 +17,7 @@ import lombok.Setter;
  * @author Misagh Moayyed
  * @since 8.0.0
  */
-@JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonInclude(JsonInclude.Include.NON_EMPTY)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -30,13 +34,54 @@ public class OidcCredentialIssuerMetadata implements Serializable {
     @JsonProperty("credential_endpoint")
     private String credentialEndpoint;
 
+    @JsonProperty("display")
+    private List<CredentialConfigurationDisplay> display;
+
     @JsonProperty("nonce_endpoint")
     private String nonceEndpoint;
+
+    @JsonProperty("batch_credential_issuance")
+    private BatchCredentialIssuance batchCredentialIssuance;
 
     @JsonProperty("credential_configurations_supported")
     private Map<String, CredentialConfiguration> credentialConfigurationsSupported;
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
+    /**
+     * Advertises that the credential endpoint accepts several proofs in one request,
+     * and how many. OpenID4VCI 1.0 replaced the batch credential endpoint with this.
+     */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
+    public static class BatchCredentialIssuance implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 7169398914160552046L;
+
+        @JsonProperty("batch_size")
+        private int batchSize;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
+    public static class CredentialDefinition implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 3316840958171736511L;
+
+        @JsonProperty("@context")
+        private List<String> context;
+
+        @JsonProperty("type")
+        private List<String> type;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     @Getter
     @Setter
     public static class CredentialConfiguration implements Serializable {
@@ -44,10 +89,16 @@ public class OidcCredentialIssuerMetadata implements Serializable {
         private static final long serialVersionUID = 7169398914160552045L;
 
         @JsonProperty("format")
-        private String format = CredentialConfigurationFormats.VC_SD_JWT.getFormat();
+        private String format = CredentialConfigurationFormats.DC_SD_JWT.getValue();
 
         @JsonProperty("scope")
         private String scope;
+
+        @JsonProperty("vct")
+        private String vct;
+
+        @JsonProperty("credential_definition")
+        private CredentialDefinition credentialDefinition;
 
         @JsonProperty("cryptographic_binding_methods_supported")
         private List<String> cryptographicBindingMethodsSupported = Stream.of("jwk").toList();
@@ -58,33 +109,74 @@ public class OidcCredentialIssuerMetadata implements Serializable {
         @JsonProperty("proof_types_supported")
         private Map<String, ProofTypeSupported> proofTypesSupported = new LinkedHashMap<>();
 
-        @JsonProperty("claims")
-        private Map<String, ClaimMetadata> claims = new LinkedHashMap<>();
+        @JsonProperty("credential_metadata")
+        private CredentialMetadata credentialMetadata = new CredentialMetadata();
     }
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     @Getter
     @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
+    public static class CredentialMetadata implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 7269398914160552045L;
+
+        @JsonProperty("display")
+        private List<CredentialConfigurationDisplay> display;
+
+        @JsonProperty("claims")
+        private List<ClaimMetadata> claims;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
     public static class ProofTypeSupported implements Serializable {
         @Serial
         private static final long serialVersionUID = 5908913328617999837L;
 
         @JsonProperty("proof_signing_alg_values_supported")
+        @Builder.Default
         private List<String> proofSigningAlgValuesSupported = Stream.of("ES256", "RS256").toList();
     }
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     @Getter
     @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
     public static class ClaimMetadata implements Serializable {
         @Serial
         private static final long serialVersionUID = 216197021376111794L;
 
-        @JsonProperty("mandatory")
-        private Boolean mandatory;
+        @JsonProperty("path")
+        private List<String> path;
 
-        @JsonProperty("value_type")
-        private String valueType;
+        @JsonProperty("display")
+        private List<ClaimDisplay> display;
+        
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @SuperBuilder
+        @Jacksonized
+        @NoArgsConstructor
+        public static class ClaimDisplay implements Serializable {
+            @Serial
+            private static final long serialVersionUID = 216197021376111795L;
+
+            private String name;
+            
+            @Builder.Default
+            private String locale = "en-US";
+        }
     }
+
 
 }

@@ -17,6 +17,7 @@ import org.apereo.cas.notifications.CommunicationsManager;
 import org.apereo.cas.services.ServicesManager;
 import org.apereo.cas.util.nativex.CasRuntimeHintsRegistrar;
 import org.apereo.cas.util.scripting.ExecutableCompiledScriptFactory;
+import org.apereo.cas.util.scripting.ScriptResourceCacheManager;
 import org.apereo.cas.util.serialization.ComponentSerializationPlanConfigurer;
 import org.apereo.cas.util.spring.beans.BeanCondition;
 import org.apereo.cas.util.spring.beans.BeanSupplier;
@@ -49,13 +50,14 @@ import org.apereo.cas.web.flow.VerifyPasswordlessAccountAuthenticationAction;
 import org.apereo.cas.web.flow.actions.ConsumerExecutionAction;
 import org.apereo.cas.web.flow.actions.StaticEventExecutionAction;
 import org.apereo.cas.web.flow.actions.WebflowActionBeanSupplier;
+import org.apereo.cas.web.flow.delegation.PasswordlessDelegatedClientAuthenticationRequestCustomizer;
 import org.apereo.cas.web.flow.delegation.PasswordlessDelegatedClientAuthenticationWebflowStateContributor;
 import org.apereo.cas.web.flow.delegation.PasswordlessDelegatedClientIdentityProviderAuthorizer;
 import org.apereo.cas.web.flow.delegation.PasswordlessDetermineDelegatedAuthenticationAction;
 import org.apereo.cas.web.flow.resolver.CasDelegatingWebflowEventResolver;
 import org.apereo.cas.web.flow.resolver.CasWebflowEventResolver;
 import lombok.val;
-import org.jspecify.annotations.NonNull;
+import org.pac4j.oidc.client.OidcClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -213,7 +215,7 @@ public class CasPasswordlessAuthenticationWebflowAutoConfiguration {
             final CasConfigurationProperties casProperties,
             final ConfigurableApplicationContext applicationContext,
             @Qualifier(DelegatedClientIdentityProviderConfigurationProducer.BEAN_NAME)
-            final ObjectProvider<@NonNull DelegatedClientIdentityProviderConfigurationProducer> delegatedClientIdentityProviderConfigurationProducer,
+            final ObjectProvider<DelegatedClientIdentityProviderConfigurationProducer> delegatedClientIdentityProviderConfigurationProducer,
             @Qualifier(PasswordlessUserAccountStore.BEAN_NAME)
             final PasswordlessUserAccountStore passwordlessUserAccountStore) {
             return WebflowActionBeanSupplier.builder()
@@ -358,9 +360,17 @@ public class CasPasswordlessAuthenticationWebflowAutoConfiguration {
     static class PasswordlessDelegatedAuthenticationConfiguration {
 
         @Bean
+        @ConditionalOnMissingBean(name = "passwordlessDelegatedClientAuthenticationRequestCustomizer")
+        @ConditionalOnClass(OidcClient.class)
+        @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
+        public PasswordlessDelegatedClientAuthenticationRequestCustomizer passwordlessDelegatedClientAuthenticationRequestCustomizer(
+            final CasConfigurationProperties casProperties) {
+            return new PasswordlessDelegatedClientAuthenticationRequestCustomizer(casProperties);
+        }
+        
+        @Bean
         @ConditionalOnMissingBean(name = "passwordlessDelegatedClientAuthenticationWebflowStateContributor")
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
-        @ConditionalOnFeatureEnabled(feature = CasFeatureModule.FeatureCatalog.DelegatedAuthentication)
         public DelegatedClientAuthenticationWebflowStateContributor passwordlessDelegatedClientAuthenticationWebflowStateContributor() {
             return new PasswordlessDelegatedClientAuthenticationWebflowStateContributor();
         }
@@ -391,19 +401,19 @@ public class CasPasswordlessAuthenticationWebflowAutoConfiguration {
             final MultifactorAuthenticationTriggerSelectionStrategy multifactorTriggerSelectionStrategy,
             final ConfigurableApplicationContext applicationContext,
             @Qualifier(DelegatedClientIdentityProviderConfigurationProducer.BEAN_NAME)
-            final ObjectProvider<@NonNull DelegatedClientIdentityProviderConfigurationProducer> pp,
-            final CasConfigurationProperties casProperties) {
+            final ObjectProvider<DelegatedClientIdentityProviderConfigurationProducer> pp,
+            final CasConfigurationProperties casProperties,
+            @Qualifier(ScriptResourceCacheManager.BEAN_NAME)
+            final ObjectProvider<ScriptResourceCacheManager> scriptResourceCacheManager) {
             return WebflowActionBeanSupplier.builder()
                 .withApplicationContext(applicationContext)
                 .withProperties(casProperties)
                 .withAction(() -> {
                     val scriptFactory = ExecutableCompiledScriptFactory.findExecutableCompiledScriptFactory();
                     if (pp.getIfAvailable() != null && CasRuntimeHintsRegistrar.notInNativeImage() && scriptFactory.isPresent()) {
-                        val selectorScriptResource = casProperties.getAuthn().getPasswordless().getCore()
-                            .getDelegatedAuthenticationSelectorScript().getLocation();
                         return new PasswordlessDetermineDelegatedAuthenticationAction(casProperties,
-                            multifactorTriggerSelectionStrategy, passwordlessPrincipalFactory, authenticationSystemSupport,
-                            pp.getObject(), scriptFactory.get().fromResource(selectorScriptResource));
+                            multifactorTriggerSelectionStrategy, passwordlessPrincipalFactory,
+                            authenticationSystemSupport, pp.getObject(), scriptResourceCacheManager);
                     }
                     return new StaticEventExecutionAction(CasWebflowConstants.TRANSITION_ID_SUCCESS);
                 })

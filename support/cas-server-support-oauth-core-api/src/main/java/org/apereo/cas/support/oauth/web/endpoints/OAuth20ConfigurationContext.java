@@ -17,6 +17,7 @@ import org.apereo.cas.support.oauth.authenticator.OAuth20CasAuthenticationBuilde
 import org.apereo.cas.support.oauth.profile.OAuth20ProfileScopeToAttributesFilter;
 import org.apereo.cas.support.oauth.profile.OAuth20UserProfileDataCreator;
 import org.apereo.cas.support.oauth.validator.OAuth20ClientSecretValidator;
+import org.apereo.cas.support.oauth.validator.OAuth20ProofOfPossessionValidator;
 import org.apereo.cas.support.oauth.validator.authorization.OAuth20AuthorizationRequestValidator;
 import org.apereo.cas.support.oauth.validator.token.OAuth20TokenRequestValidator;
 import org.apereo.cas.support.oauth.web.OAuth20RequestParameterResolver;
@@ -40,14 +41,16 @@ import org.apereo.cas.util.gen.RandomStringGenerator;
 import org.apereo.cas.util.http.HttpClient;
 import org.apereo.cas.util.serialization.StringSerializer;
 import org.apereo.cas.validation.AuthenticationAttributeReleasePolicy;
+import org.apereo.cas.web.UrlValidator;
 import org.apereo.cas.web.cookie.CasCookieBuilder;
 import org.apereo.cas.web.support.ArgumentExtractor;
 import org.apereo.cas.web.support.CookieUtils;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.SuperBuilder;
 import lombok.ToString;
-import lombok.experimental.SuperBuilder;
 import lombok.val;
+import org.jspecify.annotations.Nullable;
 import org.pac4j.core.config.Config;
 import org.pac4j.core.context.session.SessionStore;
 import org.pac4j.core.profile.ProfileManager;
@@ -56,6 +59,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.MessageSource;
 import org.springframework.scheduling.TaskScheduler;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * This is {@link OAuth20ConfigurationContext}.
@@ -164,14 +168,18 @@ public class OAuth20ConfigurationContext {
     private final TenantExtractor tenantExtractor;
 
     private final MessageSource messageSource;
-    
+
+    private final UrlValidator urlValidator;
+
+    private final OAuth20ProofOfPossessionValidator proofOfPossessionValidator;
+
     /**
      * Gets ticket granting ticket.
      *
      * @param context the context
      * @return the ticket granting ticket
      */
-    public TicketGrantingTicket fetchTicketGrantingTicketFrom(final JEEContext context) {
+    public @Nullable TicketGrantingTicket fetchTicketGrantingTicketFrom(final JEEContext context) {
         val ticketGrantingTicket = CookieUtils.getTicketGrantingTicketFromRequest(
             getTicketGrantingTicketCookieGenerator(),
             getTicketRegistry(), context.getNativeRequest());
@@ -186,5 +194,19 @@ public class OAuth20ConfigurationContext {
                 });
         }
         return ticketGrantingTicket;
+    }
+
+    /**
+     * Set the path of the replicated session cookie from the request context path, when sessions are replicated
+     * and the cookie path is configured automatically. This must happen before anything writes the cookie, such as
+     * the security interceptor that saves the requested URL, or the first cookie is issued with the default path.
+     *
+     * @param request the request
+     */
+    public void configureSessionReplicationCookiePath(final HttpServletRequest request) {
+        val replication = casProperties.getAuthn().getOauth().getSessionReplication();
+        if (replication.isReplicateSessions() && replication.getCookie().isAutoConfigureCookiePath()) {
+            CookieUtils.configureCookiePath(request, oauthDistributedSessionCookieGenerator);
+        }
     }
 }

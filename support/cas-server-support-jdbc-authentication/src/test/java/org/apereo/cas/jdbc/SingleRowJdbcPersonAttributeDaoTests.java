@@ -53,7 +53,7 @@ class SingleRowJdbcPersonAttributeDaoTests {
 
     @BeforeEach
     void setup() throws Exception {
-        testDataSource = JpaBeans.newDataSource("org.hsqldb.jdbcDriver", "sa", StringUtils.EMPTY, "jdbc:hsqldb:mem:cas");
+        testDataSource = JpaBeans.newDataSource("org.hsqldb.jdbcDriver", "sa", StringUtils.EMPTY, "jdbc:hsqldb:mem:" + UUID.randomUUID());
         setUpSchema();
     }
 
@@ -86,6 +86,7 @@ class SingleRowJdbcPersonAttributeDaoTests {
         assertEquals(List.of("blue"), attribs.getAttributes().get("dressShirtColor"));
         assertNull(attribs.getAttributes().get("shirt_color"));
         assertEquals(List.of("Andrew"), attribs.getAttributes().get("firstName"));
+        assertNotNull(impl.toConfiguration());
     }
 
     @Test

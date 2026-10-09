@@ -1,12 +1,12 @@
 package org.apereo.cas.webauthn.web;
 
 import module java.base;
+import org.apereo.cas.webauthn.WebAuthnUtils;
 import com.yubico.core.WebAuthnServer;
 import com.yubico.data.AssertionRequestWrapper;
 import com.yubico.data.RegistrationRequest;
 import com.yubico.util.Either;
 import com.yubico.webauthn.data.ByteArray;
-import com.yubico.webauthn.data.ResidentKeyRequirement;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -20,8 +20,11 @@ import lombok.val;
 import org.apache.commons.lang3.StringUtils;
 import org.jooq.lambda.Unchecked;
 import org.jspecify.annotations.NonNull;
+import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -52,7 +55,14 @@ public class WebAuthnController extends BaseWebAuthnController {
      */
     public static final String WEBAUTHN_ENDPOINT_AUTHENTICATE = "/authenticate";
 
+    /**
+     * Passkey provider icon endpoint.
+     */
+    public static final String WEBAUTHN_ENDPOINT_PASSKEY_PROVIDER_ICON = "/passkey-providers/{aaguid}/icon";
+
     private static final String WEBAUTHN_ENDPOINT_FINISH = "/finish";
+
+    private static final MediaType SVG = MediaType.valueOf("image/svg+xml");
 
 
     private final WebAuthnServer server;
@@ -89,6 +99,10 @@ public class WebAuthnController extends BaseWebAuthnController {
      * @param credentialNickname     the credential nickname
      * @param requireResidentKey     the require resident key
      * @param sessionTokenBase64     the session token base 64
+     * @param conditional            whether to start a conditional create registration (passkey upgrade), whose
+     *                               WebAuthn user entity is named after {@code username}, the username typed at login;
+     *                               the registration still belongs to the authenticated principal
+     * @param username               the username typed at login, for a conditional create registration
      * @param authenticatedPrincipal the authenticated principal
      * @param request                the request
      * @param response               the response
@@ -101,7 +115,9 @@ public class WebAuthnController extends BaseWebAuthnController {
             @Parameter(name = "displayName", in = ParameterIn.QUERY, required = true, description = "Display name"),
             @Parameter(name = "credentialNickname", in = ParameterIn.QUERY, required = false, description = "Credential nickname"),
             @Parameter(name = "requireResidentKey", in = ParameterIn.QUERY, required = false, description = "Require resident key"),
-            @Parameter(name = "sessionToken", in = ParameterIn.QUERY, required = false, description = "Session token")
+            @Parameter(name = "sessionToken", in = ParameterIn.QUERY, required = false, description = "Session token"),
+            @Parameter(name = "conditional", in = ParameterIn.QUERY, required = false, description = "Conditional create (passkey upgrade)"),
+            @Parameter(name = "username", in = ParameterIn.QUERY, required = false, description = "Username typed at login")
         },
         requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
             required = true,
@@ -117,20 +133,23 @@ public class WebAuthnController extends BaseWebAuthnController {
         @RequestParam(value = "credentialNickname", required = false, defaultValue = StringUtils.EMPTY) final String credentialNickname,
         @RequestParam(value = "requireResidentKey", required = false) final boolean requireResidentKey,
         @RequestParam(value = "sessionToken", required = false, defaultValue = StringUtils.EMPTY) final String sessionTokenBase64,
+        @RequestParam(value = "conditional", required = false) final boolean conditional,
+        @RequestParam(value = "username", required = false, defaultValue = StringUtils.EMPTY) final String username,
         final Principal authenticatedPrincipal,
         final HttpServletRequest request,
         final HttpServletResponse response)
         throws Exception {
 
-        val result = server.startRegistration(
-            request,
-            authenticatedPrincipal.getName(),
-            Optional.of(displayName),
-            Optional.ofNullable(credentialNickname),
-            requireResidentKey
-                ? ResidentKeyRequirement.REQUIRED
-                : ResidentKeyRequirement.DISCOURAGED,
-            Optional.ofNullable(sessionTokenBase64).map(Unchecked.function(ByteArray::fromBase64Url)));
+        val result = conditional
+            ? server.startConditionalRegistration(request, authenticatedPrincipal.getName(),
+                Optional.of(username).filter(StringUtils::isNotBlank), Optional.of(displayName))
+            : server.startRegistration(
+                request,
+                authenticatedPrincipal.getName(),
+                Optional.of(displayName),
+                Optional.ofNullable(credentialNickname),
+                server.determineResidentKeyRequirement(requireResidentKey),
+                Optional.ofNullable(sessionTokenBase64).map(Unchecked.function(ByteArray::fromBase64Url)));
 
         if (result.isRight()) {
             return startResponse(new StartRegistrationResponse(result.right().orElseThrow()));
@@ -175,7 +194,10 @@ public class WebAuthnController extends BaseWebAuthnController {
 
     /**
      * Finish authentication and create response entity.
+     * A failure carries {@code unknownCredential} so the browser can be told, through the WebAuthn
+     * Signal API, to stop offering a passkey that is no longer registered.
      *
+     * @param request      the request
      * @param responseJson the response json
      * @return the response entity
      * @throws Exception the exception
@@ -186,13 +208,48 @@ public class WebAuthnController extends BaseWebAuthnController {
         final HttpServletRequest request,
         @RequestBody final String responseJson) throws Exception {
         val result = server.finishAuthentication(request, responseJson);
-        if (result.isRight()) {
-            val sessionToken = result.right().orElseThrow().getSessionToken();
-            val session = server.getSessionManager().getSession(request, sessionToken)
-                .orElseThrow(() -> new IllegalStateException("Session not found for the given session token"));
-            LOGGER.debug("Found valid session token [{}] to finish off authentication", session.getBase64());
+        if (result.isLeft()) {
+            return ResponseEntity.badRequest().body(result.left().orElseThrow());
         }
-        return finishResponse(result, responseJson);
+        val authentication = result.right().orElseThrow();
+        val session = server.getSessionManager().getSession(request, authentication.getSessionToken())
+            .orElseThrow(() -> new IllegalStateException("Session not found for the given session token"));
+        LOGGER.debug("Found valid session token [{}] to finish off authentication", session.getBase64());
+        return finishResponse(Either.right(authentication), responseJson);
+    }
+
+    /**
+     * Icon of the passkey provider known by the given AAGUID, served from the bundled passkey provider list so that
+     * pages can show it without carrying the image around. The SVG comes from a third-party list, so it is served
+     * sandboxed and may not be sniffed as anything else; browsers draw it without running scripts when it is shown
+     * as an image.
+     *
+     * @param aaguid the AAGUID as a UUID string
+     * @return the SVG icon, or not found
+     */
+    @GetMapping(value = WEBAUTHN_ENDPOINT_PASSKEY_PROVIDER_ICON)
+    @Operation(summary = "Passkey provider icon",
+        parameters = @Parameter(name = "aaguid", in = ParameterIn.PATH, required = true, description = "Authenticator AAGUID"))
+    public ResponseEntity<byte[]> passkeyProviderIcon(@PathVariable("aaguid") final String aaguid) {
+        return WebAuthnUtils.getPasskeyProvider(aaguid)
+            .flatMap(WebAuthnUtils.PasskeyProvider::iconSvg)
+            .map(icon -> ResponseEntity.ok()
+                .contentType(SVG)
+                .cacheControl(CacheControl.maxAge(Duration.ofDays(1)))
+                .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(icon))
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Path of the icon of the passkey provider known by the given AAGUID, relative to the CAS context.
+     *
+     * @param aaguid the AAGUID as a UUID string
+     * @return the icon path
+     */
+    public static String getPasskeyProviderIconPath(final String aaguid) {
+        return BASE_ENDPOINT_WEBAUTHN + WEBAUTHN_ENDPOINT_PASSKEY_PROVIDER_ICON.replace("{aaguid}", aaguid);
     }
 
     @RequiredArgsConstructor

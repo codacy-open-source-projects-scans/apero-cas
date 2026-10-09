@@ -49,7 +49,10 @@ import static org.mockito.Mockito.*;
     CasCoreNotificationsAutoConfiguration.class,
     CasCoreWebAutoConfiguration.class
 },
-    properties = "cas.ticket.registry.hazelcast.cluster.core.instance-name=testlocalmonitor")
+    properties = {
+        "cas.ticket.registry.hazelcast.cluster.core.instance-name=testlocalmonitor",
+        "cas.ticket.registry.hazelcast.cluster.network.tcpip-enabled=false"
+    })
 @Tag("Hazelcast")
 @ExtendWith(CasTestExtension.class)
 class HazelcastHealthIndicatorTests {
@@ -84,8 +87,7 @@ class HazelcastHealthIndicatorTests {
         val memoryStats = mock(MemoryStats.class);
         when(memoryStats.getFreeHeap()).thenReturn(125_555_248L);
         when(memoryStats.getCommittedHeap()).thenReturn(251_658_240L);
-        val statistics = new HazelcastHealthIndicator.HazelcastStatistics(null, 1, memoryStats);
-
+        val statistics = new HazelcastHealthIndicator.HazelcastStatistics(null, Set.of(), memoryStats);
         assertEquals(49, statistics.getPercentFree());
     }
 }

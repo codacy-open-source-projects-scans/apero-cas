@@ -5,18 +5,22 @@ import org.apereo.cas.authentication.MultifactorAuthenticationProvider;
 import org.apereo.cas.authentication.MultifactorAuthenticationTrigger;
 import org.apereo.cas.authentication.mfa.TestMultifactorAuthenticationProvider;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
+import org.apereo.cas.support.saml.BaseSamlIdPConfigurationTests;
 import org.apereo.cas.support.saml.SamlIdPConstants;
 import org.apereo.cas.support.saml.SamlIdPTestUtils;
 import org.apereo.cas.support.saml.idp.SamlIdPSessionManager;
 import org.apereo.cas.support.saml.services.idp.metadata.SamlRegisteredServiceMetadataAdaptor;
 import org.apereo.cas.support.saml.web.idp.profile.builders.enc.validate.SamlObjectSignatureValidator;
-import org.apereo.cas.web.flow.BaseSamlIdPWebflowTests;
+import org.apereo.cas.util.http.HttpRequestUtils;
 import lombok.val;
 import org.apache.commons.lang3.tuple.Pair;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.opensaml.messaging.context.MessageContext;
 import org.opensaml.saml.common.SAMLObjectBuilder;
+import org.opensaml.saml.common.messaging.context.SAMLBindingContext;
+import org.opensaml.saml.common.messaging.context.SAMLPeerEntityContext;
 import org.opensaml.saml.metadata.resolver.MetadataResolver;
 import org.opensaml.saml.saml2.core.AuthnContextClassRef;
 import org.opensaml.saml.saml2.core.AuthnContextComparisonTypeEnumeration;
@@ -40,49 +44,113 @@ import static org.mockito.Mockito.*;
  * @since 6.4.0
  */
 @Tag("MFATrigger")
-@Import(SamlIdPMultifactorAuthenticationTriggerTests.MultifactorTestConfiguration.class)
-@TestPropertySource(properties = {
-    "cas.authn.saml-idp.metadata.file-system.location=${#systemProperties['java.io.tmpdir']}/saml4944",
-    "cas.authn.saml-idp.core.context.authentication-context-class-mappings=context1->mfa-dummy"
-})
-class SamlIdPMultifactorAuthenticationTriggerTests extends BaseSamlIdPWebflowTests {
-    @Autowired
-    @Qualifier("samlIdPMultifactorAuthenticationTrigger")
-    private MultifactorAuthenticationTrigger samlIdPMultifactorAuthenticationTrigger;
+class SamlIdPMultifactorAuthenticationTriggerTests {
+    @Import(MultifactorTestConfiguration.class)
+    @TestPropertySource(properties = "cas.authn.saml-idp.metadata.file-system.location=${#systemProperties['java.io.tmpdir']}/saml4944")
+    abstract static class BaseTests extends BaseSamlIdPConfigurationTests {
+        @Autowired
+        @Qualifier("samlIdPMultifactorAuthenticationTrigger")
+        protected MultifactorAuthenticationTrigger samlIdPMultifactorAuthenticationTrigger;
 
-    @Test
-    void verifyContextMapping() throws Throwable {
-        val registeredService = SamlIdPTestUtils.getSamlRegisteredService();
-        val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
+    }
 
-        val authnRequest = SamlIdPTestUtils.getAuthnRequest(openSamlConfigBean, registeredService);
-        var builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
-            .getBuilder(AuthnContextClassRef.DEFAULT_ELEMENT_NAME);
-        val classRef = (AuthnContextClassRef) builder.buildObject(AuthnContextClassRef.DEFAULT_ELEMENT_NAME);
-        classRef.setURI("context1");
-        builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
-            .getBuilder(RequestedAuthnContext.DEFAULT_ELEMENT_NAME);
-        val reqCtx = (RequestedAuthnContext) builder.buildObject(RequestedAuthnContext.DEFAULT_ELEMENT_NAME);
-        reqCtx.setComparison(AuthnContextComparisonTypeEnumeration.EXACT);
-        reqCtx.getAuthnContextClassRefs().add(classRef);
-        authnRequest.setRequestedAuthnContext(reqCtx);
+    @Nested
+    @TestPropertySource(properties = "cas.authn.saml-idp.core.context.authentication-context-class-mappings=context1->mfa-dummy")
+    class AuthnContextClassTests extends BaseTests {
+        @Test
+        void verifyContextMapping() throws Throwable {
+            val registeredService = SamlIdPTestUtils.getSamlRegisteredService();
+            val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
 
-        val request = new MockHttpServletRequest();
-        request.addParameter(SamlIdPConstants.AUTHN_REQUEST_ID, authnRequest.getID());
-        val response = new MockHttpServletResponse();
+            val authnRequest = SamlIdPTestUtils.getAuthnRequest(openSamlConfigBean, registeredService);
+            var builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
+                .getBuilder(AuthnContextClassRef.DEFAULT_ELEMENT_NAME);
+            val classRef = (AuthnContextClassRef) builder.buildObject(AuthnContextClassRef.DEFAULT_ELEMENT_NAME);
+            classRef.setURI("context1");
+            builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
+                .getBuilder(RequestedAuthnContext.DEFAULT_ELEMENT_NAME);
+            val reqCtx = (RequestedAuthnContext) builder.buildObject(RequestedAuthnContext.DEFAULT_ELEMENT_NAME);
+            reqCtx.setComparison(AuthnContextComparisonTypeEnumeration.EXACT);
+            reqCtx.getAuthnContextClassRefs().add(classRef);
+            authnRequest.setRequestedAuthnContext(reqCtx);
 
-        val messageContext = new MessageContext();
-        signAuthnRequest(request, response, authnRequest, registeredService, messageContext);
-        messageContext.setMessage(authnRequest);
-        val context = Pair.of(authnRequest, messageContext);
+            val request = new MockHttpServletRequest();
+            request.addParameter(SamlIdPConstants.AUTHN_REQUEST_ID, authnRequest.getID());
+            val response = new MockHttpServletResponse();
 
-        SamlIdPSessionManager.of(openSamlConfigBean, samlIdPDistributedSessionStore)
-            .store(new JEEContext(request, response), context);
-        assertTrue(samlIdPMultifactorAuthenticationTrigger.supports(request, registeredService,
-            RegisteredServiceTestUtils.getAuthentication(), service));
-        val result = samlIdPMultifactorAuthenticationTrigger.isActivated(RegisteredServiceTestUtils.getAuthentication(),
-            registeredService, request, response, service);
-        assertTrue(result.isPresent());
+            val messageContext = new MessageContext();
+            messageContext.setMessage(signAuthnRequest(request, response, authnRequest, registeredService));
+            val context = Pair.of(authnRequest, messageContext);
+
+            SamlIdPSessionManager.of(openSamlConfigBean, samlIdPDistributedSessionStore)
+                .store(new JEEContext(request, response), context);
+            assertTrue(samlIdPMultifactorAuthenticationTrigger.supports(request, registeredService,
+                RegisteredServiceTestUtils.getAuthentication(), service));
+            val result = samlIdPMultifactorAuthenticationTrigger.isActivated(RegisteredServiceTestUtils.getAuthentication(),
+                registeredService, request, response, service);
+            assertTrue(result.isPresent());
+        }
+
+        @Test
+        void verifyPreviouslyAuthenticatedContextMapping() throws Throwable {
+            val registeredService = SamlIdPTestUtils.getSamlRegisteredService();
+            val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
+
+            val authnRequest = SamlIdPTestUtils.getAuthnRequest(openSamlConfigBean, registeredService);
+            var builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
+                .getBuilder(AuthnContextClassRef.DEFAULT_ELEMENT_NAME);
+            val classRef = (AuthnContextClassRef) builder.buildObject(AuthnContextClassRef.DEFAULT_ELEMENT_NAME);
+            classRef.setURI("context1");
+            builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
+                .getBuilder(RequestedAuthnContext.DEFAULT_ELEMENT_NAME);
+            val reqCtx = (RequestedAuthnContext) builder.buildObject(RequestedAuthnContext.DEFAULT_ELEMENT_NAME);
+            reqCtx.setComparison(AuthnContextComparisonTypeEnumeration.EXACT);
+            reqCtx.getAuthnContextClassRefs().add(classRef);
+            authnRequest.setRequestedAuthnContext(reqCtx);
+
+            val request = new MockHttpServletRequest();
+            request.addParameter(SamlIdPConstants.AUTHN_REQUEST_ID, authnRequest.getID());
+            val response = new MockHttpServletResponse();
+            val messageContext = new MessageContext();
+            messageContext.setMessage(authnRequest);
+            messageContext.ensureSubcontext(SAMLBindingContext.class).setHasBindingSignature(true);
+            messageContext.ensureSubcontext(SAMLPeerEntityContext.class).setAuthenticated(true);
+
+            SamlIdPSessionManager.of(openSamlConfigBean, samlIdPDistributedSessionStore)
+                .store(new JEEContext(request, response), Pair.of(authnRequest, messageContext));
+            assertTrue(samlIdPMultifactorAuthenticationTrigger.supports(request, registeredService,
+                RegisteredServiceTestUtils.getAuthentication(), service));
+            val result = samlIdPMultifactorAuthenticationTrigger.isActivated(RegisteredServiceTestUtils.getAuthentication(),
+                registeredService, request, response, service);
+            assertTrue(result.isPresent());
+        }
+    }
+
+    @Nested
+    @TestPropertySource(properties = "cas.authn.saml-idp.core.context.authentication-context-class-mappings=https://refeds.org/profile/mfa->mfa-dummy")
+    class EntityAttributesTests extends BaseTests {
+        @Test
+        void verifyOperation() throws Throwable {
+
+            val registeredService = SamlIdPTestUtils.getSamlRegisteredService("https://sp.testshib.org/shibboleth-sp");
+            val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
+            val authnRequest = SamlIdPTestUtils.getAuthnRequest(openSamlConfigBean, registeredService);
+
+            val request = (MockHttpServletRequest) HttpRequestUtils.getHttpServletRequestFromRequestAttributes();
+            request.addParameter(SamlIdPConstants.AUTHN_REQUEST_ID, authnRequest.getID());
+            val response = HttpRequestUtils.getHttpServletResponseFromRequestAttributes();
+            val messageContext = new MessageContext();
+            messageContext.setMessage(signAuthnRequest(request, response, authnRequest, registeredService));
+            val context = Pair.of(authnRequest, messageContext);
+
+            SamlIdPSessionManager.of(openSamlConfigBean, samlIdPDistributedSessionStore)
+                .store(new JEEContext(request, response), context);
+            assertTrue(samlIdPMultifactorAuthenticationTrigger.supports(request, registeredService,
+                RegisteredServiceTestUtils.getAuthentication(), service));
+            val result = samlIdPMultifactorAuthenticationTrigger.isActivated(RegisteredServiceTestUtils.getAuthentication(),
+                registeredService, request, response, service);
+            assertTrue(result.isPresent());
+        }
     }
 
     @TestConfiguration(value = "MultifactorTestConfiguration", proxyBeanMethods = false)

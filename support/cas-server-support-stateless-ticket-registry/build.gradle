@@ -1,4 +1,6 @@
-description = "Apereo CAS Stateless Ticket Registry Support"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Stores CAS tickets in stateless for shared single sign-on state across server nodes."
 ext {
     publishMetadata = true
     projectMetadata = [
@@ -22,6 +24,8 @@ dependencies {
     implementation project(":core:cas-server-core-webflow-mfa-api")
     implementation project(":core:cas-server-core-services-registry")
     implementation project(":core:cas-server-core-services-authentication")
+
+    implementation project(":support:cas-server-support-stateless-ticket-registry-api")
 
     testImplementation project(path: ":core:cas-server-core-authentication", configuration: "tests")
     testImplementation project(path: ":core:cas-server-core-authentication-api", configuration: "tests")

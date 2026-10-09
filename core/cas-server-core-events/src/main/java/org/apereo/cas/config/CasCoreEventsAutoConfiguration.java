@@ -13,7 +13,6 @@ import org.apereo.cas.util.spring.beans.BeanCondition;
 import org.apereo.cas.util.spring.beans.BeanSupplier;
 import org.apereo.cas.util.spring.boot.ConditionalOnFeatureEnabled;
 import org.apereo.cas.util.text.MessageSanitizer;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.actuate.autoconfigure.endpoint.condition.ConditionalOnAvailableEndpoint;
@@ -50,18 +49,18 @@ public class CasCoreEventsAutoConfiguration {
         @Lazy(false)
         public CasAuthenticationEventListener defaultCasEventListener(
             @Qualifier(GeoLocationService.BEAN_NAME)
-            final ObjectProvider<@NonNull GeoLocationService> geoLocationService,
+            final ObjectProvider<GeoLocationService> geoLocationService,
             @Qualifier(MessageSanitizer.BEAN_NAME)
             final MessageSanitizer messageSanitizer,
             final ConfigurableApplicationContext applicationContext,
             @Qualifier(CasEventRepository.BEAN_NAME)
-            final CasEventRepository casEventRepository,
+            final ObjectProvider<CasEventRepository> casEventRepository,
             @Qualifier(LogoutManager.DEFAULT_BEAN_NAME)
-            final LogoutManager logoutManager) {
+            final ObjectProvider<LogoutManager> logoutManager) {
             return BeanSupplier.of(CasAuthenticationEventListener.class)
                 .when(CONDITION.given(applicationContext.getEnvironment()))
-                .supply(() -> new CasAuthenticationAuthenticationEventListener(casEventRepository,
-                    messageSanitizer, geoLocationService.getIfAvailable(), logoutManager))
+                .supply(() -> new CasAuthenticationAuthenticationEventListener(casEventRepository.getObject(),
+                    messageSanitizer, geoLocationService.getIfAvailable(), logoutManager.getObject()))
                 .otherwiseProxy()
                 .get();
         }
@@ -76,7 +75,7 @@ public class CasCoreEventsAutoConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public CasEventsReportEndpoint casEventsReportEndpoint(
             @Qualifier(CasEventRepository.BEAN_NAME)
-            final ObjectProvider<@NonNull CasEventRepository> casEventRepository,
+            final ObjectProvider<CasEventRepository> casEventRepository,
             final CasConfigurationProperties casProperties,
             final ConfigurableApplicationContext applicationContext) {
             return new CasEventsReportEndpoint(casProperties, applicationContext, casEventRepository);

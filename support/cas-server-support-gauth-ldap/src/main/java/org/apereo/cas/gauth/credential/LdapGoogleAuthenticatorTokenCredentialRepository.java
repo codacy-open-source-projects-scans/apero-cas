@@ -15,6 +15,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
+import org.jspecify.annotations.Nullable;
 import org.ldaptive.ConnectionFactory;
 import org.ldaptive.LdapEntry;
 import org.springframework.beans.factory.DisposableBean;
@@ -71,12 +72,12 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
     }
 
     @Override
-    public OneTimeTokenAccount get(final long id) {
+    public @Nullable OneTimeTokenAccount get(final long id) {
         return load().stream().filter(acct -> acct.getId() == id).findFirst().orElse(null);
     }
 
     @Override
-    public OneTimeTokenAccount get(final String username, final long id) {
+    public @Nullable OneTimeTokenAccount get(final String username, final long id) {
         return get(username).stream().filter(acct -> acct.getId() == id).findFirst().orElse(null);
     }
 
@@ -115,6 +116,14 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
         return update(account.assignIdIfNecessary());
     }
 
+    /**
+     * Store the account in the user's entry, keeping the entry's other accounts. All of them are written back as a
+     * single JSON array value, because some directories keep only one value of the account attribute; Active
+     * Directory, for example, treats {@code description} as single-valued on user objects.
+     *
+     * @param account the account
+     * @return the account
+     */
     @Override
     public OneTimeTokenAccount update(final OneTimeTokenAccount account) {
         if (account.getId() < 0) {
@@ -145,14 +154,10 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
                 ac.setScratchCodes(account.getScratchCodes());
                 ac.setSecretKey(account.getSecretKey());
                 ac.setProperties(account.getProperties());
+                ac.setLastUsedDateTime(account.getLastUsedDateTime());
             }, () -> existingAccounts.add(account));
 
-            val accountsToSave = existingAccounts.stream()
-                .map(acct -> encode(account))
-                .filter(Objects::nonNull)
-                .map(acct -> mapToJson(CollectionUtils.wrapArrayList(acct)))
-                .collect(Collectors.toSet());
-            executeModifyOperation(accountsToSave, entry);
+            updateAccounts(existingAccounts, entry);
         }
         return account;
     }
@@ -182,9 +187,21 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
         }
     }
 
+    /**
+     * Count the stored accounts, that is the devices, across all entries; an entry can hold several.
+     *
+     * @return the number of accounts
+     */
     @Override
     public long count() {
-        return locateLdapEntriesForAll().size();
+        return locateLdapEntriesForAll()
+            .stream()
+            .map(entry -> entry.getAttribute(ldapProperties.getAccountAttributeName()))
+            .filter(Objects::nonNull)
+            .flatMap(attribute -> attribute.getStringValues().stream())
+            .map(LdapGoogleAuthenticatorTokenCredentialRepository::mapFromJson)
+            .mapToLong(List::size)
+            .sum();
     }
 
     @Override
@@ -249,7 +266,7 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
         });
     }
 
-    private LdapEntry locateLdapEntryFor(final String principal) {
+    private @Nullable LdapEntry locateLdapEntryFor(final String principal) {
         return FunctionUtils.doUnchecked(() -> {
             val searchFilter = '(' + ldapProperties.getSearchFilter() + ')';
             val filter = LdapUtils.newLdaptiveSearchFilter(searchFilter, CollectionUtils.wrapList(principal));
@@ -266,7 +283,7 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
         });
     }
 
-    private LdapEntry searchLdapAccountsBy(final long id) {
+    private @Nullable LdapEntry searchLdapAccountsBy(final long id) {
         return FunctionUtils.doUnchecked(() -> {
             val searchFilterWithoutSpaces = String.format("(%s=*\"id\":%s*)", ldapProperties.getAccountAttributeName(), id);
             val searchFilterWithSpaces = String.format("(%s=*\"id\" : %s*)", ldapProperties.getAccountAttributeName(), id);
@@ -277,11 +294,33 @@ public class LdapGoogleAuthenticatorTokenCredentialRepository
             val response = connectionFactory.executeSearchOperation(ldapProperties.getBaseDn(),
                 filter, ldapProperties.getPageSize(), ldapProperties.getAccountAttributeName());
             if (LdapUtils.containsResultEntry(response)) {
-                val entry = response.getEntry();
+                val entry = response.getEntries()
+                    .stream()
+                    .filter(candidate -> containsAccount(candidate, id))
+                    .findFirst()
+                    .orElse(null);
                 LOGGER.debug("Located LDAP entry [{}]", entry);
                 return entry;
             }
             return null;
         });
+    }
+
+    /**
+     * Whether the entry stores an account with the given id. The search filter can only match the id as a substring
+     * of the stored JSON, so it also matches entries whose accounts have longer ids that start with the same digits;
+     * this check keeps only the entry that really holds the account.
+     *
+     * @param entry the LDAP entry
+     * @param id    the account id
+     * @return true if the entry stores the account
+     */
+    private boolean containsAccount(final LdapEntry entry, final long id) {
+        val attribute = entry.getAttribute(ldapProperties.getAccountAttributeName());
+        return attribute != null && attribute.getStringValues()
+            .stream()
+            .map(LdapGoogleAuthenticatorTokenCredentialRepository::mapFromJson)
+            .flatMap(List::stream)
+            .anyMatch(account -> account.getId() == id);
     }
 }

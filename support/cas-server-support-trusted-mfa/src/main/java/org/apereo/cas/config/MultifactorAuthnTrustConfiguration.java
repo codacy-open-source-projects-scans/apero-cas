@@ -29,7 +29,6 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apereo.inspektr.audit.spi.AuditActionResolver;
 import org.apereo.inspektr.audit.spi.AuditResourceResolver;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.actuate.autoconfigure.endpoint.condition.ConditionalOnAvailableEndpoint;
@@ -147,11 +146,11 @@ class MultifactorAuthnTrustConfiguration {
         @Lazy(false)
         public Cleanable mfaTrustStorageCleaner(
             final ConfigurableApplicationContext applicationContext,
-            @Qualifier(MultifactorAuthenticationTrustStorage.BEAN_NAME) final MultifactorAuthenticationTrustStorage mfaTrustEngine) {
+            @Qualifier(MultifactorAuthenticationTrustStorage.BEAN_NAME) final ObjectProvider<MultifactorAuthenticationTrustStorage> mfaTrustEngine) {
             return BeanSupplier.of(Cleanable.class)
                 .when(BeanCondition.on("cas.authn.mfa.trusted.cleaner.schedule.enabled").isTrue().evenIfMissing()
                     .given(applicationContext.getEnvironment()))
-                .supply(() -> new MultifactorAuthenticationTrustStorageCleaner(mfaTrustEngine))
+                .supply(() -> new MultifactorAuthenticationTrustStorageCleaner(mfaTrustEngine.getObject()))
                 .otherwiseProxy()
                 .get();
         }
@@ -182,7 +181,7 @@ class MultifactorAuthnTrustConfiguration {
         public MultifactorAuthenticationTrustedDevicesReportEndpoint mfaTrustedDevicesReportEndpoint(
             final ConfigurableApplicationContext applicationContext,
             final CasConfigurationProperties casProperties,
-            @Qualifier(MultifactorAuthenticationTrustStorage.BEAN_NAME) final ObjectProvider<@NonNull MultifactorAuthenticationTrustStorage> mfaTrustEngine) {
+            @Qualifier(MultifactorAuthenticationTrustStorage.BEAN_NAME) final ObjectProvider<MultifactorAuthenticationTrustStorage> mfaTrustEngine) {
             return new MultifactorAuthenticationTrustedDevicesReportEndpoint(casProperties, applicationContext, mfaTrustEngine);
         }
     }

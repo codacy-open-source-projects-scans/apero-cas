@@ -20,6 +20,8 @@ import org.apereo.cas.ticket.registry.key.RedisKeyGeneratorFactory;
 import org.apereo.cas.ticket.registry.pub.RedisTicketRegistryMessagePublisher;
 import org.apereo.cas.ticket.serialization.TicketSerializationManager;
 import org.apereo.cas.util.CollectionUtils;
+import org.apereo.cas.util.CompressionUtils;
+import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.crypto.CipherExecutor;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.thread.Cleanable;
@@ -33,7 +35,6 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Strings;
 import org.hjson.JsonValue;
 import org.hjson.Stringify;
-import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -41,8 +42,10 @@ import org.springframework.data.redis.connection.DataType;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisKeyValueAdapter;
 import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.convert.RedisData;
 import org.springframework.data.redis.core.types.Expiration;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 /**
@@ -61,9 +64,9 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
 
     private final CasRedisTemplates casRedisTemplates;
 
-    private final ObjectProvider<@NonNull Cache<@NonNull String, Ticket>> ticketCache;
+    private final ObjectProvider<Cache<String, Ticket>> ticketCache;
 
-    private final ObjectProvider<@NonNull RedisTicketRegistryMessagePublisher> messagePublisher;
+    private final ObjectProvider<RedisTicketRegistryMessagePublisher> messagePublisher;
 
     private final Optional<RedisModulesOperations> redisModulesOperations;
 
@@ -78,8 +81,8 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                                final TicketCatalog ticketCatalog,
                                final ConfigurableApplicationContext applicationContext,
                                final CasRedisTemplates casRedisTemplates,
-                               final ObjectProvider<@NonNull Cache<@NonNull String, Ticket>> ticketCache,
-                               final ObjectProvider<@NonNull RedisTicketRegistryMessagePublisher> messagePublisher,
+                               final ObjectProvider<Cache<String, Ticket>> ticketCache,
+                               final ObjectProvider<RedisTicketRegistryMessagePublisher> messagePublisher,
                                final Optional<RedisModulesOperations> redisModulesOperations,
                                final RedisKeyGeneratorFactory redisKeyGeneratorFactory,
                                final RedisKeyValueAdapter redisKeyValueAdapter,
@@ -208,7 +211,7 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                 return document;
             })
             .filter(Objects::nonNull)
-            .map(document -> deserializeTicket(document.json(), document.type()))
+            .map(this::deserializeTicket)
             .map(this::decodeTicket)
             .filter(Objects::nonNull)
             .peek(ticket -> {
@@ -220,16 +223,44 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
             });
     }
 
+
+    @Override
+    public Stream<? extends Ticket> getTicketsFor(final Service service) {
+        return redisModulesOperations
+            .stream()
+            .map(command -> {
+                val originalUrl = URI.create(service.getOriginalUrl());
+                val host = String.format("%s?//%s", originalUrl.getScheme(), originalUrl.getHost());
+                val query = String.format("@%s:\"%s\"", RedisTicketDocument.FIELD_NAME_SERVICE, host);
+                LOGGER.debug("Executing search query [{}]", query);
+                return command.search(SEARCH_INDEX_NAME, query)
+                    .map(RedisTicketDocument::from)
+                    .filter(document -> StringUtils.isNotBlank(document.json()))
+                    .map(redisDoc -> {
+                        val ticket = deserializeTicket(redisDoc);
+                        return decodeTicket(ticket);
+                    })
+                    .filter(Objects::nonNull)
+                    .filter(ticket -> !ticket.isExpired())
+                    .filter(ticket -> isTicketForService(ticket, service));
+            })
+            .findFirst()
+            .orElseGet(() -> (Stream<Ticket>) super.getTicketsFor(service));
+    }
+    
     @Override
     public Stream<? extends Ticket> getSessionsFor(final String principalId) {
         return redisKeyGeneratorFactory.getRedisKeyGenerator(Principal.class.getName())
             .map(generator -> {
                 val userId = digestIdentifier(principalId);
                 val redisPrincipalKey = generator.forId(userId);
-                val members = casRedisTemplates.getSessionsRedisTemplate().boundZSetOps(redisPrincipalKey).range(0, Long.MAX_VALUE);
+                val options = ScanOptions.scanOptions().count(1000).build();
+                val cursor = casRedisTemplates.getSessionsRedisTemplate().boundZSetOps(redisPrincipalKey).scan(options);
+                val spliterator = Spliterators.spliteratorUnknownSize(cursor, Spliterator.ORDERED | Spliterator.NONNULL);
 
-                return Objects.requireNonNull(members)
-                    .stream()
+                return StreamSupport.stream(spliterator, false)
+                    .onClose(cursor::close)
+                    .map(ZSetOperations.TypedTuple::getValue)
                     .filter(Objects::nonNull)
                     .map(ticketId -> {
                         val redisKeyGenerator = redisKeyGeneratorFactory.getRedisKeyGenerator(TicketGrantingTicket.PREFIX).orElseThrow();
@@ -261,47 +292,84 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
             .build();
         try (val cursor = casRedisTemplates.getTicketsRedisTemplate().scan(options)) {
             val windowKeys = new ArrayList<String>(window);
-            cursor.forEachRemaining(windowKeys::add);
-            if (!windowKeys.isEmpty()) {
-                val principals = casRedisTemplates.getTicketsRedisTemplate()
-                    .executePipelined((RedisCallback<Object>) conn -> {
-                        for (val key : windowKeys) {
-                            conn.hashCommands().hGet(key.getBytes(StandardCharsets.UTF_8),
-                                RedisTicketDocument.FIELD_NAME_PRINCIPAL.getBytes(StandardCharsets.UTF_8));
-                        }
-                        return null;
-                    }, principalFieldSerializer);
-
-                val toDelete = new ArrayList<byte[]>(principals.size());
-                for (var i = 0; i < windowKeys.size(); i++) {
-                    val givenPrincipal = principals.get(i);
-                    if (givenPrincipal != null && Strings.CI.equals(target, givenPrincipal.toString())) {
-                        toDelete.add(windowKeys.get(i).getBytes(StandardCharsets.UTF_8));
-                    }
-                }
-
-                for (int i = 0; i < toDelete.size(); i += delChunk) {
-                    val end = Math.min(i + delChunk, toDelete.size());
-                    val chunk = toDelete.subList(i, end).toArray(new byte[0][]);
-
-                    val result = casRedisTemplates.getTicketsRedisTemplate()
-                        .executePipelined((RedisCallback<Object>) conn -> {
-                            conn.keyCommands().unlink(chunk);
-                            return null;
-                        });
-
-                    if (!result.isEmpty() && result.getFirst() instanceof final Long count) {
-                        deleted += count;
-                    }
+            while (cursor.hasNext()) {
+                windowKeys.add(cursor.next());
+                if (windowKeys.size() >= window) {
+                    deleted += deleteTicketsForPrincipal(target, principalFieldSerializer, windowKeys, delChunk);
+                    windowKeys.clear();
                 }
             }
+            if (!windowKeys.isEmpty()) {
+                deleted += deleteTicketsForPrincipal(target, principalFieldSerializer, windowKeys, delChunk);
+            }
+        }
+        return deleted;
+    }
+
+    private long deleteTicketsForPrincipal(final String target,
+                                           final RedisSerializer principalFieldSerializer,
+                                           final List<String> windowKeys,
+                                           final int delChunk) {
+        val principals = casRedisTemplates.getTicketsRedisTemplate()
+            .executePipelined((RedisCallback<Object>) conn -> {
+                for (val key : windowKeys) {
+                    conn.hashCommands().hGet(key.getBytes(StandardCharsets.UTF_8),
+                        RedisTicketDocument.FIELD_NAME_PRINCIPAL.getBytes(StandardCharsets.UTF_8));
+                }
+                return null;
+            }, principalFieldSerializer);
+
+        val toDelete = new ArrayList<RedisTicketToDelete>(principals.size());
+        for (var i = 0; i < windowKeys.size(); i++) {
+            val givenPrincipal = principals.get(i);
+            if (givenPrincipal != null && Strings.CI.equals(target, givenPrincipal.toString())) {
+                val redisKey = windowKeys.get(i);
+                val compositeKey = RedisKeyGenerator.parse(redisKey);
+                val redisKeyGenerator = redisKeyGeneratorFactory.getRedisKeyGenerator(compositeKey.getPrefix()).orElseThrow();
+                val cacheKey = redisKeyGenerator.rawKey(redisKey);
+                toDelete.add(new RedisTicketToDelete(redisKey, cacheKey));
+            }
+        }
+
+        var deleted = 0L;
+        for (var i = 0; i < toDelete.size(); i += delChunk) {
+            val end = Math.min(i + delChunk, toDelete.size());
+            val ticketChunk = toDelete.subList(i, end);
+            val chunk = ticketChunk
+                .stream()
+                .map(ticket -> ticket.redisKey().getBytes(StandardCharsets.UTF_8))
+                .toArray(byte[][]::new);
+
+            val result = casRedisTemplates.getTicketsRedisTemplate()
+                .executePipelined((RedisCallback<Object>) conn -> {
+                    conn.keyCommands().unlink(chunk);
+                    return null;
+                });
+
+            if (!result.isEmpty() && result.getFirst() instanceof final Long count) {
+                deleted += count;
+            }
+            ticketChunk.forEach(ticketToDelete -> {
+                ticketCache.ifAvailable(cache -> cache.invalidate(ticketToDelete.cacheKey()));
+                messagePublisher.ifAvailable(publisher -> publisher.deleteByKey(ticketToDelete.redisKey()));
+            });
         }
         return deleted;
     }
 
     @Override
     public long countSessionsFor(final String principalId) {
-        return getSessionsFor(principalId).count();
+        return redisKeyGeneratorFactory.getRedisKeyGenerator(Principal.class.getName())
+            .map(generator -> {
+                val userId = digestIdentifier(principalId);
+                val redisPrincipalKey = generator.forId(userId);
+                val ops = casRedisTemplates.getSessionsRedisTemplate().boundZSetOps(redisPrincipalKey);
+                val now = Instant.now(Clock.systemUTC());
+                ops.removeRangeByScore(0, Long.valueOf(now.getEpochSecond()).doubleValue());
+                return ops.zCard();
+            })
+            .filter(Objects::nonNull)
+            .orElse(0L);
     }
 
     @Override
@@ -332,10 +400,10 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
             .map(command -> {
                 val criteria = new ArrayList<String>();
                 queryAttributes.forEach((key, value) -> value.forEach(queryValue -> {
-                    val escapedValue = isCipherExecutorEnabled()
-                        ? digestIdentifier(queryValue.toString())
-                        : Strings.CI.replace(queryValue.toString(), "-", "\\-");
-                    criteria.add(String.format("(%s%s*%s)", digestIdentifier(key), isCipherExecutorEnabled() ? " " : "_", escapedValue));
+                    val criterion = isCipherExecutorEnabled()
+                        ? String.format("%s *%s", digestIdentifier(key), digestIdentifier(queryValue.toString()))
+                        : toSearchTerm(key, queryValue.toString());
+                    criteria.add('(' + criterion + ')');
                 }));
                 val query = String.format("(%s) @%s:%s", String.join("|", criteria),
                     RedisTicketDocument.FIELD_NAME_PREFIX, TicketGrantingTicket.PREFIX);
@@ -344,7 +412,7 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                     .map(RedisTicketDocument::from)
                     .filter(document -> StringUtils.isNotBlank(document.json()))
                     .map(redisDoc -> {
-                        val ticket = deserializeTicket(redisDoc.json(), redisDoc.type());
+                        val ticket = deserializeTicket(redisDoc);
                         return decodeTicket(ticket);
                     })
                     .filter(ticket -> !ticket.isExpired());
@@ -365,10 +433,12 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                     .map(RedisTicketDocument::from)
                     .filter(document -> StringUtils.isNotBlank(document.json()))
                     .map(redisDoc -> {
-                        val ticket = deserializeTicket(redisDoc.json(), redisDoc.type());
+                        val ticket = deserializeTicket(redisDoc);
                         return decodeTicket(ticket);
                     })
+                    .filter(Objects::nonNull)
                     .filter(ticket -> !ticket.isExpired())
+                    .filter(ticket -> isTicketForService(ticket, service))
                     .count();
             })
             .findFirst()
@@ -404,7 +474,7 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                             val redisDocument = redisKeyValueAdapter.get(rawKey, keyspace, RedisTicketDocument.class);
                             return Stream.ofNullable(redisDocument)
                                 .filter(Objects::nonNull)
-                                .map(document -> deserializeTicket(document.json(), document.type()))
+                                .map(this::deserializeTicket)
                                 .filter(Objects::nonNull)
                                 .findFirst()
                                 .orElse(null);
@@ -459,29 +529,88 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                     JsonValue.readJSON(json).toString(Stringify.FORMATTED));
             }
 
+            val redisSearchAvailable = isRedisSearchAvailable();
             val principal = getPrincipalIdFrom(ticket);
-            val attributeMap = (Map<String, Object>) collectAndDigestTicketAttributes(ticket);
-            val attributesEncoded = attributeMap
-                .entrySet()
-                .parallelStream()
-                .map(entry -> {
-                    val entryValues = (List) entry.getValue();
-                    val valueList = entryValues.parallelStream().map(Object::toString).collect(Collectors.joining(","));
-                    return entry.getKey() + (isCipherExecutorEnabled() ? " " : "_") + valueList;
-                })
-                .collect(Collectors.joining(","));
+            val attributesEncoded = redisSearchAvailable ? encodeTicketAttributes(ticket) : null;
+            val service = redisSearchAvailable && ticket instanceof final ServiceAwareTicket sat && Objects.nonNull(sat.getService())
+                ? sat.getService().getId()
+                : null;
 
             return RedisTicketDocument
                 .builder()
                 .type(encTicket.getClass().getName())
                 .ticketId(encTicket.getId())
-                .json(json)
+                .json(compressTicketJson(json))
                 .prefix(ticket.getPrefix())
                 .principal(digestIdentifier(principal))
                 .attributes(attributesEncoded)
-                .service(ticket instanceof final ServiceAwareTicket sat && Objects.nonNull(sat.getService()) ? sat.getService().getId() : null)
+                .service(service)
                 .build();
         });
+    }
+
+    protected Ticket deserializeTicket(final RedisTicketDocument document) {
+        return deserializeTicket(decompressTicketJson(document.json()), document.type());
+    }
+
+    protected String compressTicketJson(final String json) {
+        return CompressionUtils.deflate(json);
+    }
+
+    protected String decompressTicketJson(final String json) {
+        val text = StringUtils.trim(json);
+        if (StringUtils.isBlank(text)) {
+            return text;
+        }
+        if (!text.isEmpty() && (text.charAt(0) == '{' || text.charAt(0) == '[')) {
+            return text;
+        }
+        val decoded = EncodingUtils.decodeBase64(text);
+        val inflated = CompressionUtils.inflateToString(decoded);
+        return StringUtils.defaultIfBlank(inflated, text);
+    }
+
+    private String encodeTicketAttributes(final Ticket ticket) {
+        val attributeMap = (Map<String, Object>) collectAndDigestTicketAttributes(ticket);
+        return attributeMap
+            .entrySet()
+            .stream()
+            .map(entry -> {
+                val entryValues = (List<Object>) entry.getValue();
+                if (isCipherExecutorEnabled()) {
+                    val valueList = entryValues.parallelStream().map(Object::toString).collect(Collectors.joining(","));
+                    return entry.getKey() + ' ' + valueList;
+                }
+                return entryValues.stream()
+                    .map(value -> toSearchTerm(entry.getKey(), value.toString()))
+                    .collect(Collectors.joining(","));
+            })
+            .collect(Collectors.joining(","));
+    }
+
+    private static boolean isTicketForService(final Ticket ticket, final Service service) {
+        return ticket instanceof final ServiceAwareTicket serviceAwareTicket
+            && serviceAwareTicket.getService() != null
+            && serviceAwareTicket.getService().getId().equals(service.getId());
+    }
+
+    private static String toSearchTerm(final String key, final String value) {
+        return escapeSearchTerm(key) + '_' + escapeSearchTerm(value);
+    }
+
+    private static String escapeSearchTerm(final String text) {
+        val builder = new StringBuilder(text.length());
+        text.codePoints().forEach(codePoint -> {
+            if (!Character.isLetterOrDigit(codePoint) && codePoint != '_') {
+                builder.append('\\');
+            }
+            builder.appendCodePoint(codePoint);
+        });
+        return builder.toString();
+    }
+
+    private boolean isRedisSearchAvailable() {
+        return redisModulesOperations.isPresent();
     }
 
     protected @Nullable Ticket getTicketFromRedis(final Predicate<Ticket> predicate, final String redisKeyPattern,
@@ -501,7 +630,7 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                     return redisKeyValueAdapter.get(rawTicketId, keyspace, RedisTicketDocument.class);
                 })
                 .filter(Objects::nonNull)
-                .map(document -> deserializeTicket(document.json(), document.type()))
+                .map(this::deserializeTicket)
                 .map(this::decodeTicket)
                 .filter(predicate)
                 .findFirst()
@@ -530,13 +659,11 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
         val timeout = RedisKeyGenerator.getTicketExpirationInSeconds(ticket);
         val ticketDocument = buildTicketAsDocument(ticket);
 
-        val valueOps = casRedisTemplates.getTicketsRedisTemplate().boundValueOps(redisKeyPattern);
-        valueOps.set(ticketDocument, Expiration.from(timeout, TimeUnit.SECONDS));
-
         val keyspace = redisKeyGenerator.getKeyspace();
         val redisDataItem = new RedisData();
         redisKeyValueAdapter.getConverter().write(ticketDocument, redisDataItem);
         redisDataItem.setKeyspace(keyspace);
+        redisDataItem.setTimeToLive(timeout, TimeUnit.SECONDS);
 
         redisKeyValueAdapter.put(ticketDocument.ticketId(), redisDataItem, keyspace);
         configureTicketExpirationInstant(ticket, redisKeyPattern);
@@ -564,7 +691,7 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
             if (ticket.getExpirationPolicy() instanceof final IdleExpirationPolicy iep) {
                 ops.expireAt(iep.getIdleExpirationTime(ticket).toInstant());
             } else {
-                ops.expire(timeout, TimeUnit.SECONDS);
+                ops.expire(Expiration.from(timeout, TimeUnit.SECONDS));
             }
         }
     }
@@ -576,7 +703,7 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
             LOGGER.debug("Ticket [{}] will expire at [{}]", ticket.getId(), expirationInstant);
         } else {
             val timeoutSeconds = RedisKeyGenerator.getTicketExpirationInSeconds(ticket);
-            casRedisTemplates.getTicketsRedisTemplate().expire(redisKeyPattern, timeoutSeconds, TimeUnit.SECONDS);
+            casRedisTemplates.getTicketsRedisTemplate().expire(redisKeyPattern, Expiration.from(timeoutSeconds, TimeUnit.SECONDS));
             LOGGER.debug("Ticket [{}] will expire in [{}] second(s)", ticket.getId(), timeoutSeconds);
         }
     }
@@ -601,6 +728,9 @@ public class RedisTicketRegistry extends AbstractTicketRegistry implements Clean
                         indexesOnNamespaces.add(prefix);
                     }
                 }));
+    }
+
+    private record RedisTicketToDelete(String redisKey, String cacheKey) {
     }
 
     @Data

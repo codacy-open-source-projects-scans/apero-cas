@@ -1,9 +1,12 @@
 package org.apereo.cas.configuration.model.support.oidc;
 
 import module java.base;
+import org.apereo.cas.configuration.support.DurationCapable;
 import org.apereo.cas.configuration.support.RequiresModule;
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.Setter;
+import lombok.ToString;
 import lombok.experimental.Accessors;
 
 /**
@@ -27,7 +30,16 @@ public class OidcVerifiableCredentialConfigurationProperties implements Serializ
      * This value is published in issuer metadata and is used by wallets
      * to determine how the credential request and response should be processed.
      */
-    private String format;
+    private CredentialConfigurationFormats format = CredentialConfigurationFormats.DC_SD_JWT;
+
+    /**
+     * Length of time for which a credential issued by this configuration remains valid.
+     * The value controls the {@code exp} claim of the issued credential, and the
+     * {@code validUntil} property for credential formats that carry one. Wallets store
+     * credentials long after issuance, so this must outlive the issuance exchange itself.
+     */
+    @DurationCapable
+    private String credentialValidity = "P30D";
 
     /**
      * OAuth scope associated with this credential configuration.
@@ -70,4 +82,64 @@ public class OidcVerifiableCredentialConfigurationProperties implements Serializ
      * into the final credential payload.
      */
     private Map<String, OidcVerifiableCredentialClaimProperties> claims = new LinkedHashMap<>();
+
+    /**
+     * Control display settings of this credential configuration used in metadata generation.
+     */
+    private List<CredentialConfigurationDisplay> display =
+        new ArrayList<>(List.of(new CredentialConfigurationDisplay()));
+
+    @Getter
+    @Setter
+    public static class CredentialConfigurationDisplay implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 2912814689105176317L;
+        /**
+         * Locale that controls this configuration's display.
+         */
+        private String locale = "en-US";
+        /**
+         * Display name for this configuration.
+         */
+        private String name = "My Verifiable Credential";
+        /**
+         * Logo url.
+         */
+        private String logo = "https://apereo.github.io/cas/images/cas_logo.png";
+        /**
+         * Description for this configuration.
+         */
+        private String description = "My verifiable credential that belongs to my organization";
+        /**
+         * Background color for this configuration.
+         */
+        private String backgroundColor;
+        /**
+         * Text color for this configuration.
+         */
+        private String textColor;
+    }
+
+    @RequiredArgsConstructor
+    @Getter
+    @ToString(includeFieldNames = false, of = "value")
+    public enum CredentialConfigurationFormats {
+        /**
+         * A Data Integrity Claims (DC) credential encoded as an SD-JWT, supporting
+         * selective disclosure of claims while preserving cryptographic integrity.
+         */
+        DC_SD_JWT("dc+sd-jwt"),
+        /**
+         * It is a JSON-based string that represents the credential as a base64url-encoded JWT.
+         */
+        JWT_VC_JSON("jwt_vc_json"),
+        /**
+         * This format includes a {@code @context} URLs that maps data properties to universal schemas.
+         * Every field has a strict, globally defined semantic meaning.
+         */
+        JWT_VC_JSON_LD("jwt_vc_json-ld");
+
+        private final String value;
+    }
+
 }

@@ -91,6 +91,22 @@ public class WebAuthnMultifactorAuthenticationCoreProperties implements Serializ
     private String allowedOrigins;
 
     /**
+     * URL of the page where a user creates a passkey for the account, published as {@code enroll}
+     * in the passkey endpoints document at {@code /.well-known/passkey-endpoints}, so that password managers
+     * can send users straight to it. If unset and account management is enabled, the multifactor devices panel
+     * of the account profile is used; otherwise no enrollment page is published.
+     */
+    private String passkeyEnrollUrl;
+
+    /**
+     * URL of the page where a user manages the account's passkeys, published as {@code manage}
+     * in the passkey endpoints document at {@code /.well-known/passkey-endpoints}. If unset and account
+     * management is enabled, the multifactor devices panel of the account profile is used; otherwise no
+     * management page is published.
+     */
+    private String passkeyManageUrl;
+
+    /**
      * If false finish registration op will only allow
      * registrations where the attestation signature can be linked to a trusted attestation root. This excludes self
      * attestation and none attestation. Regardless of the value of this option, invalid attestation
@@ -126,6 +142,16 @@ public class WebAuthnMultifactorAuthenticationCoreProperties implements Serializ
     private boolean allowPrimaryAuthentication;
 
     /**
+     * Offer a passkey right after a password login: CAS shows a short page that asks the browser's password manager
+     * to create a passkey for the account on its own (WebAuthn conditional create), then continues as usual.
+     * Browsers and password managers that do not support it continue immediately.
+     * <p>Takes effect only when {@code allow-primary-authentication} and {@code allow-untrusted-attestation}
+     * are also enabled, since such passkeys come without attestation and are meant for passkey login;
+     * otherwise this setting is ignored.</p>
+     */
+    private boolean passkeyUpgradeEnabled;
+
+    /**
      * When enabled, allows the user/system to accept multiple accounts
      * and device registrations per user, allowing one to switch between
      * or register new devices/accounts automatically.
@@ -140,7 +166,61 @@ public class WebAuthnMultifactorAuthenticationCoreProperties implements Serializ
      * to use the primary device to authenticate for security or other practical reasons.
      */
     private boolean qrCodeAuthenticationEnabled;
-    
+
+    /**
+     * Specifies the desired authenticator attachment modality during credential
+     * registration.
+     *
+     * <p>This is used by the WebAuthn client/browser to select which type of
+     * authenticator may be used to create the credential.</p>
+     *
+     * <ul>
+     *   <li>{@code PLATFORM}: an authenticator built into, or tightly bound to,
+     *       the user's device, such as Touch ID, Windows Hello, Android/iOS passkeys.</li>
+     *   <li>{@code CROSS_PLATFORM}: an external/roaming authenticator usable across
+     *       multiple devices, such as a USB, NFC, or BLE security key like a YubiKey.</li>
+     * </ul>
+     *
+     * <p>If unset, the client may use any available authenticator.</p>
+     */
+    private String authenticatorAttachment;
+
+    /**
+     * Specifies the relying party's requirement for user verification during
+     * credential registration and/or authentication.
+     *
+     * <p>User verification means the authenticator verifies the user locally,
+     * for example with a PIN, fingerprint, face recognition, or device unlock.
+     * This is stronger than simple user presence, such as touching a security key.</p>
+     *
+     * <ul>
+     *   <li>{@code REQUIRED}: user verification must be performed; the operation
+     *       should fail if it is unavailable or not completed.</li>
+     *   <li>{@code PREFERRED}: user verification should be performed if possible,
+     *       but the operation may still succeed without it.</li>
+     *   <li>{@code DISCOURAGED}: user verification is not requested, typically to
+     *       reduce friction or avoid prompting for PIN/biometric verification.</li>
+     * </ul>
+     *
+     * <p>The server should validate the resulting authenticator data flags according
+     * to the configured requirement.</p>
+     */
+    private String userVerificationRequirement;
+
+    /**
+     * User-agent hints, in descending order of preference, sent with registration and authentication requests
+     * to guide the browser towards the kind of authenticator to offer first.
+     * <p>Hints do not restrict which authenticator may be used, and where they conflict with the authenticator
+     * attachment, browsers that support them follow the hints.</p>
+     * <ul>
+     *   <li>{@code security-key}: a physical security key, such as a USB or NFC key.</li>
+     *   <li>{@code client-device}: an authenticator on the device in use, such as the platform passkey manager.</li>
+     *   <li>{@code hybrid}: a phone or other general-purpose device, usually reached by scanning a QR code.</li>
+     * </ul>
+     * <p>If unset, no hints are sent.</p>
+     */
+    private List<String> hints = new ArrayList<>();
+
     public WebAuthnMultifactorAuthenticationCoreProperties() {
         trustSource.getTrustedDeviceMetadata().setLocation(new ClassPathResource("webauthn-metadata.json"));
     }

@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.jspecify.annotations.Nullable;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.transaction.annotation.Transactional;
 import jakarta.persistence.EntityManager;
@@ -36,18 +37,40 @@ public class JpaGoogleAuthenticatorTokenCredentialRepository extends BaseGoogleA
         super(tokenCredentialCipher, scratchCodesCipher, googleAuthenticator);
     }
 
+    /**
+     * Find the account by id and return a decoded, detached copy, like every other read here.
+     * Handing out the managed entity would expose the encoded secret and scratch codes, and a caller that
+     * passes it back to {@link #update(OneTimeTokenAccount)} would have them encoded a second time.
+     *
+     * @param id the account id
+     * @return the decoded account, or null when there is none
+     */
     @Override
-    public OneTimeTokenAccount get(final long id) {
-        return entityManager.find(JpaGoogleAuthenticatorAccount.class, id);
+    public @Nullable OneTimeTokenAccount get(final long id) {
+        return Optional.ofNullable(entityManager.find(JpaGoogleAuthenticatorAccount.class, id))
+            .map(this::detachAndDecode)
+            .orElse(null);
     }
 
+    /**
+     * Find the account by owner and id and return a decoded, detached copy, or null when the user has no
+     * such account.
+     *
+     * @param username the owner
+     * @param id       the account id
+     * @return the decoded account, or null when there is none
+     */
     @Override
-    public OneTimeTokenAccount get(final String username, final long id) {
+    public @Nullable OneTimeTokenAccount get(final String username, final long id) {
         return entityManager.createQuery("SELECT r FROM "
                 + ENTITY_NAME + " r WHERE r.id=:id AND r.username = :username", JpaGoogleAuthenticatorAccount.class)
             .setParameter("username", username.toLowerCase(Locale.ENGLISH).trim())
             .setParameter("id", id)
-            .getSingleResult();
+            .getResultList()
+            .stream()
+            .findFirst()
+            .map(this::detachAndDecode)
+            .orElse(null);
     }
 
     @Override
@@ -77,20 +100,32 @@ public class JpaGoogleAuthenticatorTokenCredentialRepository extends BaseGoogleA
         return entityManager.merge(encoded);
     }
 
+    /**
+     * Update the stored account with the same id, or insert the account when none is stored,
+     * so that every backend treats an update of a missing device as an insert. The database assigns
+     * the id of an inserted device: merging an entity whose generated id is not in the table fails.
+     *
+     * @param account the account
+     * @return the encoded account as stored
+     */
     @Override
     public OneTimeTokenAccount update(final OneTimeTokenAccount account) {
         val ac = entityManager.find(JpaGoogleAuthenticatorAccount.class, account.getId());
-        if (ac != null) {
-            ac.setValidationCode(account.getValidationCode());
-            ac.setScratchCodes(account.getScratchCodes()
-                .stream()
-                .map(code -> BigInteger.valueOf(code.longValue()))
-                .collect(Collectors.toList()));
-            ac.setSecretKey(account.getSecretKey());
-            val encoded = encode(ac);
-            return entityManager.merge(encoded);
+        if (ac == null) {
+            val created = JpaGoogleAuthenticatorAccount.from(account);
+            created.setId(0);
+            return entityManager.merge(encode(created));
         }
-        return null;
+        val encoded = encode(account);
+        ac.setValidationCode(encoded.getValidationCode());
+        ac.setScratchCodes(encoded.getScratchCodes()
+            .stream()
+            .map(code -> new BigInteger(code.toString()))
+            .collect(Collectors.toList()));
+        ac.setSecretKey(encoded.getSecretKey());
+        ac.setProperties(new ArrayList<>(encoded.getProperties()));
+        ac.setLastUsedDateTime(encoded.getLastUsedDateTime());
+        return entityManager.merge(ac);
     }
 
     @Override
@@ -132,6 +167,11 @@ public class JpaGoogleAuthenticatorTokenCredentialRepository extends BaseGoogleA
             .getSingleResult();
         LOGGER.debug("Counted [{}] record(s) for [{}]", count, username);
         return count.longValue();
+    }
+
+    private OneTimeTokenAccount detachAndDecode(final JpaGoogleAuthenticatorAccount account) {
+        entityManager.detach(account);
+        return decode(account);
     }
 
     private List<JpaGoogleAuthenticatorAccount> fetchAccounts(final String username) {

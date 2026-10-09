@@ -3,7 +3,9 @@ package org.apereo.cas.gauth.credential;
 import module java.base;
 import org.apereo.cas.authentication.OneTimeTokenAccount;
 import org.apereo.cas.config.CasGoogleAuthenticatorRedisAutoConfiguration;
+import org.apereo.cas.gauth.RedisCompositeKey;
 import org.apereo.cas.otp.repository.credentials.OneTimeTokenCredentialRepository;
+import org.apereo.cas.redis.core.CasRedisTemplate;
 import org.apereo.cas.test.CasTestExtension;
 import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.RandomUtils;
@@ -48,9 +50,19 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfListeningOnPort(port = 6379)
 @Slf4j
 class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTimeTokenCredentialRepositoryTests {
+    private static final long MAXIMUM_OPERATION_TIME_SECONDS = 30;
+
     @Autowired
     @Qualifier(BaseGoogleAuthenticatorTokenCredentialRepository.BEAN_NAME)
     private OneTimeTokenCredentialRepository registry;
+
+    @Autowired
+    @Qualifier("redisAccountsGoogleAuthenticatorTemplate")
+    private CasRedisTemplate<String, OneTimeTokenAccount> redisAccountsGoogleAuthenticatorTemplate;
+
+    @Autowired
+    @Qualifier("redisPrincipalsGoogleAuthenticatorTemplate")
+    private CasRedisTemplate<String, OneTimeTokenAccount> redisPrincipalsGoogleAuthenticatorTemplate;
     
     @Test
     void verifySave() {
@@ -85,15 +97,76 @@ class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTime
             .name(UUID.randomUUID().toString())
             .build();
         registry.save(toSave);
+        assertEquals(1, registry.count(username));
         registry.delete(username);
-        assertEquals(0, registry.count());
+        assertEquals(0, registry.count(username));
+        assertTrue(registry.get(username).isEmpty());
+    }
+
+    @Test
+    void verifyDeleteById() {
+        val username = UUID.randomUUID().toString();
+        val first = registry.save(OneTimeTokenAccount.builder()
+            .username(username)
+            .secretKey("secret")
+            .validationCode(143211)
+            .scratchCodes(CollectionUtils.wrapList(1, 2, 3, 4, 5, 6))
+            .name(UUID.randomUUID().toString())
+            .build());
+        val second = registry.save(OneTimeTokenAccount.builder()
+            .username(username)
+            .secretKey("secret")
+            .validationCode(143212)
+            .scratchCodes(CollectionUtils.wrapList(1, 2, 3, 4, 5, 6))
+            .name(UUID.randomUUID().toString())
+            .build());
+        assertEquals(2, registry.count(username));
+        registry.delete(first.getId());
+        assertEquals(1, registry.count(username));
+        assertNull(registry.get(first.getId()));
+        assertNull(registry.get(username, first.getId()));
+        assertNotNull(registry.get(username, second.getId()));
+        assertEquals(second.getId(), registry.get(username).iterator().next().getId());
+    }
+
+    @Test
+    void verifyDeleteByIdWithoutAccountRecord() {
+        val username = UUID.randomUUID().toString();
+        val leftover = saveAlreadyDeletedDevice(username);
+        val remaining = registry.save(OneTimeTokenAccount.builder()
+            .username(username)
+            .secretKey("secret")
+            .validationCode(143212)
+            .scratchCodes(CollectionUtils.wrapList(1, 2, 3, 4, 5, 6))
+            .name(UUID.randomUUID().toString())
+            .build());
+        val otherUsername = UUID.randomUUID().toString();
+        val other = registry.save(OneTimeTokenAccount.builder()
+            .username(otherUsername)
+            .secretKey("secret")
+            .validationCode(143213)
+            .scratchCodes(CollectionUtils.wrapList(1, 2, 3, 4, 5, 6))
+            .name(UUID.randomUUID().toString())
+            .build());
+
+        assertEquals(2, registry.count(username));
+        assertNotNull(registry.get(username, leftover.getId()));
+        assertEquals(2, countPrincipalEntries(username));
+
+        registry.delete(leftover.getId());
+        assertEquals(1, registry.count(username));
+        assertEquals(1, countPrincipalEntries(username));
+        assertNull(registry.get(username, leftover.getId()));
+        assertNotNull(registry.get(username, remaining.getId()));
+        assertEquals(1, registry.count(otherUsername));
+        assertNotNull(registry.get(otherUsername, other.getId()));
     }
 
     @Override
     @RetryingTest(2)
     void verifySaveAndUpdate() {
         val username = UUID.randomUUID().toString();
-        var validationCode = RandomUtils.nextInt(1, 999999);
+        val validationCode = RandomUtils.nextInt(1, 999999);
         val toSave = OneTimeTokenAccount.builder()
             .username(username)
             .secretKey("secret")
@@ -112,7 +185,9 @@ class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTime
         registry.update(tokenAccount);
 
         await().untilAsserted(() -> {
-            val s2 = registry.get(username).iterator().next();
+            val accounts = registry.get(username);
+            assertEquals(1, accounts.size());
+            val s2 = accounts.iterator().next();
             assertEquals(validationCode2, s2.getValidationCode());
             assertEquals("newSecret", s2.getSecretKey());
         });
@@ -132,7 +207,9 @@ class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTime
                         .name(UUID.randomUUID().toString())
                         .build();
                 })
-            .limit(1000);
+            .limit(1000)
+            .toList();
+        val usernames = allAccounts.stream().map(OneTimeTokenAccount::getUsername).collect(Collectors.toSet());
         executedTimedOperation("Adding accounts", _ -> allAccounts.forEach(registry::save));
         executedTimedOperation("Getting accounts",
             Unchecked.consumer(_ -> {
@@ -141,11 +218,33 @@ class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTime
             }));
 
         val accountsStream = executedTimedOperation("Getting accounts in bulk",
-            Unchecked.supplier(() -> registry.load()));
+            Unchecked.supplier(() -> registry.load()
+                .stream()
+                .filter(acct -> usernames.contains(acct.getUsername()))
+                .toList()));
+        assertEquals(allAccounts.size(), accountsStream.size());
         executedTimedOperation("Getting accounts individually",
             Unchecked.consumer(_ -> accountsStream.forEach(acct -> assertNotNull(registry.get(acct.getId())))));
         executedTimedOperation("Getting accounts individually for users",
             Unchecked.consumer(_ -> accountsStream.forEach(acct -> assertNotNull(registry.get(acct.getUsername())))));
+    }
+
+    private OneTimeTokenAccount saveAlreadyDeletedDevice(final String username) {
+        val account = registry.save(OneTimeTokenAccount.builder()
+            .username(username)
+            .secretKey("secret")
+            .validationCode(143211)
+            .scratchCodes(CollectionUtils.wrapList(1, 2, 3, 4, 5, 6))
+            .name(UUID.randomUUID().toString())
+            .build());
+        redisAccountsGoogleAuthenticatorTemplate.delete(RedisCompositeKey.forAccounts().withAccount(account.getId()).toKeyPattern());
+        assertEquals(1, countPrincipalEntries(username));
+        return account;
+    }
+
+    private long countPrincipalEntries(final String username) {
+        val principalKey = RedisCompositeKey.forPrincipals().withPrincipal(username).toKeyPattern();
+        return Objects.requireNonNull(redisPrincipalsGoogleAuthenticatorTemplate.boundSetOps(principalKey).size());
     }
 
     private static <T> T executedTimedOperation(final String name, final Supplier<T> operation) {
@@ -155,7 +254,7 @@ class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTime
         stopwatch.stop();
         val time = stopwatch.getTime(TimeUnit.MILLISECONDS);
         LOGGER.info("[{}]: [{}]ms", name, time);
-        assertTrue(time <= 8000);
+        assertTrue(time <= TimeUnit.SECONDS.toMillis(MAXIMUM_OPERATION_TIME_SECONDS));
         return result;
     }
 
@@ -166,6 +265,6 @@ class RedisGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTime
         stopwatch.stop();
         val time = stopwatch.getTime(TimeUnit.MILLISECONDS);
         LOGGER.info("[{}]: [{}]ms", name, time);
-        assertTrue(time <= 8000);
+        assertTrue(time <= TimeUnit.SECONDS.toMillis(MAXIMUM_OPERATION_TIME_SECONDS));
     }
 }

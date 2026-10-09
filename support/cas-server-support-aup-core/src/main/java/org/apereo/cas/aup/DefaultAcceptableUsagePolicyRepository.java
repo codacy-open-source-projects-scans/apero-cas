@@ -3,7 +3,6 @@ package org.apereo.cas.aup;
 import module java.base;
 import org.apereo.cas.configuration.model.support.aup.AcceptableUsagePolicyProperties;
 import org.apereo.cas.configuration.support.TriStateBoolean;
-import org.apereo.cas.ticket.registry.TicketRegistrySupport;
 import org.apereo.cas.web.support.WebUtils;
 import lombok.val;
 import org.apache.commons.lang3.tuple.Pair;
@@ -24,9 +23,8 @@ public class DefaultAcceptableUsagePolicyRepository extends BaseAcceptableUsageP
 
     private final Map<String, Boolean> policyMap = new ConcurrentHashMap<>();
 
-    public DefaultAcceptableUsagePolicyRepository(final TicketRegistrySupport ticketRegistrySupport,
-                                                  final AcceptableUsagePolicyProperties aupProperties) {
-        super(ticketRegistrySupport, aupProperties);
+    public DefaultAcceptableUsagePolicyRepository(final AcceptableUsagePolicyProperties aupProperties) {
+        super(aupProperties);
     }
 
     @Override
@@ -57,14 +55,12 @@ public class DefaultAcceptableUsagePolicyRepository extends BaseAcceptableUsageP
     }
 
     private Pair<String, Map> getKeyAndMap(final RequestContext requestContext) {
-        switch (aupProperties.getInMemory().getScope()) {
+        return switch (aupProperties.getInMemory().getScope()) {
             case GLOBAL -> {
                 val principal = WebUtils.getAuthentication(requestContext).getPrincipal();
-                return Pair.of(principal.getId(), policyMap);
+                yield Pair.of(principal.getId(), policyMap);
             }
-            default -> {
-                return Pair.of(AUP_ACCEPTED, requestContext.getFlowScope().asMap());
-            }
-        }
+            default -> Pair.of(AUP_ACCEPTED, requestContext.getFlowScope().asMap());
+        };
     }
 }

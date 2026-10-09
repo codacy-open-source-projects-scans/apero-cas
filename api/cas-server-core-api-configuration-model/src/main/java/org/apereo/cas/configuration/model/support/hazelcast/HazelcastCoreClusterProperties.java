@@ -154,6 +154,7 @@ public class HazelcastCoreClusterProperties implements Serializable {
     private int maxSize = 85;
 
     /**
+     * Control the max size policy.
      * <ul>
      * <li>{@code FREE_HEAP_PERCENTAGE}: Policy based on minimum free JVM heap memory percentage per JVM.</li>
      * <li>{@code FREE_HEAP_SIZE}: Policy based on minimum free JVM heap memory in megabytes per JVM.</li>
@@ -175,7 +176,6 @@ public class HazelcastCoreClusterProperties implements Serializable {
     /**
      * Hazelcast supports policy-based eviction for distributed maps. Currently supported policies
      * are LRU (Least Recently Used) and LFU (Least Frequently Used) and NONE.
-     * See <a href="http://docs.hazelcast.org/docs/latest-development/manual/html/Distributed_Data_Structures/Map/Map_Eviction.html">this</a> for more info.
      */
     private String evictionPolicy = "LRU";
 

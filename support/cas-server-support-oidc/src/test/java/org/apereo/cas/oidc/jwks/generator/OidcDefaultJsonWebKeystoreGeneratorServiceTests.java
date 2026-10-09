@@ -8,11 +8,12 @@ import org.apereo.cas.util.RandomUtils;
 import lombok.val;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.awaitility.Awaitility;
 import org.jose4j.jwk.JsonWebKeySet;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.test.context.TestPropertySource;
@@ -26,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @Tag("OIDC")
 class OidcDefaultJsonWebKeystoreGeneratorServiceTests {
+    private static final String KEYSTORE_RESOURCE = "oidcJsonWebKeystore:something.jwks";
+
     static {
         System.setProperty(CasConfigurationJasyptCipherExecutor.JasyptEncryptionParameters.PASSWORD.getPropertyName(), "P@$$w0rd");
     }
@@ -57,22 +60,13 @@ class OidcDefaultJsonWebKeystoreGeneratorServiceTests {
     @TestPropertySource(properties = "cas.authn.oidc.jwks.file-system.jwks-file=file:${#systemProperties['java.io.tmpdir']}/something.jwks")
     @Nested
     class DefaultTests extends AbstractOidcTests {
-        private File keystore;
-
-        @BeforeEach
-        void setup() {
-            keystore = new File(FileUtils.getTempDirectoryPath(), "something.jwks");
-            if (keystore.exists()) {
-                assertTrue(keystore.delete());
-            }
-        }
-
         @Test
+        @ResourceLock(KEYSTORE_RESOURCE)
         void verifyOperation() throws Throwable {
+            val keystore = deleteSharedKeystore();
             val resource = oidcJsonWebKeystoreGeneratorService.generate();
             assertTrue(resource.exists());
             assertTrue(keystore.setLastModified(new Date().getTime()));
-            Thread.sleep(2000);
             oidcJsonWebKeystoreGeneratorService.store(
                 OidcJsonWebKeystoreGeneratorService.toJsonWebKeyStore(resource));
             assertTrue(oidcJsonWebKeystoreGeneratorService.find().isPresent());
@@ -80,7 +74,9 @@ class OidcDefaultJsonWebKeystoreGeneratorServiceTests {
         }
 
         @Test
+        @ResourceLock(KEYSTORE_RESOURCE)
         void verifyRegeneration() throws Throwable {
+            deleteSharedKeystore();
             val resource1 = oidcJsonWebKeystoreGeneratorService.generate();
             assertTrue(resource1.exists());
             val resource2 = oidcJsonWebKeystoreGeneratorService.generate();
@@ -109,6 +105,14 @@ class OidcDefaultJsonWebKeystoreGeneratorServiceTests {
             properties.getJwks().getCore().setJwksType("ec");
             properties.getJwks().getCore().setJwksKeySize(521);
             verifyGeneration(properties);
+        }
+
+        private static File deleteSharedKeystore() {
+            val keystore = new File(FileUtils.getTempDirectoryPath(), "something.jwks");
+            if (keystore.exists()) {
+                Awaitility.await().untilAsserted(() -> assertTrue(keystore.delete()));
+            }
+            return keystore;
         }
 
         private void verifyGeneration(final OidcProperties properties) throws Throwable {

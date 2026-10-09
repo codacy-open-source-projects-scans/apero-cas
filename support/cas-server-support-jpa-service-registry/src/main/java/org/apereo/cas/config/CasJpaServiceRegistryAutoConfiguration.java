@@ -19,7 +19,6 @@ import org.apereo.cas.util.spring.beans.BeanSupplier;
 import org.apereo.cas.util.spring.boot.ConditionalOnFeatureEnabled;
 import lombok.val;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -127,7 +126,7 @@ public class CasJpaServiceRegistryAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(name = "serviceEntityManagerFactory")
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
-        public FactoryBean<@NonNull EntityManagerFactory> serviceEntityManagerFactory(
+        public FactoryBean<EntityManagerFactory> serviceEntityManagerFactory(
             final ConfigurableApplicationContext applicationContext,
             final CasConfigurationProperties casProperties,
             @Qualifier("dataSourceService") final DataSource dataSourceService,
@@ -217,15 +216,20 @@ public class CasJpaServiceRegistryAutoConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         @ConditionalOnMissingBean(name = "jpaServiceRegistry")
         public ServiceRegistry jpaServiceRegistry(
+            final CasConfigurationProperties casProperties,
             final ConfigurableApplicationContext applicationContext,
-            final ObjectProvider<@NonNull List<ServiceRegistryListener>> serviceRegistryListeners,
+            final ObjectProvider<List<ServiceRegistryListener>> serviceRegistryListeners,
             @Qualifier("jdbcServiceRegistryTransactionTemplate")
             final TransactionOperations jdbcServiceRegistryTransactionTemplate) {
             return BeanSupplier.of(ServiceRegistry.class)
                 .when(CONDITION.given(applicationContext.getEnvironment()))
-                .supply(() -> new JpaServiceRegistry(applicationContext,
-                    Optional.ofNullable(serviceRegistryListeners.getIfAvailable()).orElseGet(ArrayList::new),
-                    jdbcServiceRegistryTransactionTemplate))
+                .supply(() -> {
+                    val registry = new JpaServiceRegistry(applicationContext,
+                        Optional.ofNullable(serviceRegistryListeners.getIfAvailable()).orElseGet(ArrayList::new),
+                        jdbcServiceRegistryTransactionTemplate);
+                    registry.setOrder(casProperties.getServiceRegistry().getJpa().getOrder());
+                    return registry;
+                })
                 .otherwiseProxy()
                 .get();
         }

@@ -4,6 +4,7 @@ import module java.base;
 import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.authentication.principal.WebApplicationService;
 import org.apereo.cas.authentication.principal.provision.DelegatedAuthenticationFailureException;
+import org.apereo.cas.pac4j.client.DelegatedIdentityProviders;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.spring.beans.BeanSupplier;
 import org.apereo.cas.web.DelegatedClientIdentityProviderConfiguration;
@@ -13,7 +14,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.pac4j.core.client.Client;
 import org.pac4j.core.client.IndirectClient;
 import org.pac4j.core.context.WebContext;
@@ -31,7 +31,7 @@ import org.springframework.webflow.execution.RequestContext;
 @Slf4j
 @RequiredArgsConstructor
 public class DefaultDelegatedClientIdentityProviderConfigurationProducer implements DelegatedClientIdentityProviderConfigurationProducer {
-    private final ObjectProvider<@NonNull DelegatedClientAuthenticationConfigurationContext> configurationContext;
+    private final ObjectProvider<DelegatedClientAuthenticationConfigurationContext> configurationContext;
 
     @Override
     public Set<DelegatedClientIdentityProviderConfiguration> produce(final RequestContext context) throws Throwable {
@@ -96,7 +96,7 @@ public class DefaultDelegatedClientIdentityProviderConfigurationProducer impleme
             val customizers = configurationContext.getObject().getDelegatedClientAuthenticationRequestCustomizers();
             if (customizers.isEmpty() || customizers.stream()
                 .filter(BeanSupplier::isNotProxy)
-                .anyMatch(Unchecked.predicate(clientConfig -> clientConfig.isAuthorized(webContext, client, currentService)))) {
+                .anyMatch(Unchecked.predicate(clientConfig -> clientConfig.isAuthorized(webContext, client, currentService, requestContext)))) {
                 return DelegatedClientIdentityProviderConfigurationFactory.builder()
                     .client(client)
                     .webContext(webContext)
@@ -109,12 +109,19 @@ public class DefaultDelegatedClientIdentityProviderConfigurationProducer impleme
         }, throwable -> Optional.<DelegatedClientIdentityProviderConfiguration>empty()).get();
     }
 
+    /**
+     * Initializes the identity provider, waiting for an initialization already in flight.
+     *
+     * @param client  the identity provider to initialize
+     * @param context the request context
+     * @throws Throwable if the provider cannot be initialized
+     */
     protected void initializeClientIdentityProvider(final IndirectClient client, final RequestContext context) throws Throwable {
         if (!client.isInitialized()) {
             val currentService = WebUtils.getService(context);
             LOGGER.trace("Initializing client [{}] with request parameters [{}] and service [{}]",
                 client, context.getRequestParameters(), currentService);
-            client.init();
+            DelegatedIdentityProviders.initialize(client);
         }
         FunctionUtils.throwIf(!client.isInitialized(), DelegatedAuthenticationFailureException::new);
     }

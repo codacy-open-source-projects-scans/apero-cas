@@ -13,6 +13,7 @@ import lombok.val;
 import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Strings;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.BeanFactoryUtils;
 import org.springframework.boot.context.properties.ConfigurationPropertiesBean;
 import org.springframework.boot.context.properties.bind.BindException;
@@ -83,7 +84,7 @@ public class CasConfigurationPropertiesValidator {
         return List.of();
     }
 
-    private List<CasConfigurationPropertyBindingResult> validateCasConfiguration() {
+    private @Nullable List<CasConfigurationPropertyBindingResult> validateCasConfiguration() {
         return FunctionUtils.doAndHandle(() -> configurationPropertyClasses.stream().map(this::validateConfiguration).flatMap(List::stream).toList());
     }
 
@@ -129,10 +130,16 @@ public class CasConfigurationPropertiesValidator {
 
     /**
      * Print report for binding results and failures.
+     * Resolving the configuration metadata repository collects and parses every
+     * {@code spring-configuration-metadata.json} on the classpath, so it is only requested when
+     * there is actually something to report on.
      *
      * @param results the results
      */
-    public void printReport(final List<CasConfigurationPropertyBindingResult> results) {
+    public void printReport(final @Nullable List<CasConfigurationPropertyBindingResult> results) {
+        if (results == null || results.isEmpty()) {
+            return;
+        }
         val metadataRepository = applicationContext.getBean(CasConfigurationMetadataRepository.BEAN_NAME, CasConfigurationMetadataRepository.class);
         var messages = results
             .stream()

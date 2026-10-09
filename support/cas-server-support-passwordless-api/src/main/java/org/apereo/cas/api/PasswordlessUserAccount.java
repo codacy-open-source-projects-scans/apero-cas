@@ -9,10 +9,10 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.SuperBuilder;
 import lombok.ToString;
 import lombok.With;
 import lombok.experimental.Accessors;
-import lombok.experimental.SuperBuilder;
 import org.apache.commons.lang3.StringUtils;
 import tools.jackson.databind.annotation.JsonDeserialize;
 
@@ -49,7 +49,7 @@ public class PasswordlessUserAccount implements Serializable {
 
     @Builder.Default
     @JsonProperty("attributes")
-    private Map<String, List<String>> attributes = new LinkedHashMap<>();
+    private Map<String, List<Object>> attributes = new LinkedHashMap<>();
 
     @JsonProperty("multifactorAuthenticationEligible")
     @Builder.Default

@@ -71,14 +71,14 @@ public class DelegatedSaml2ClientFinishLogoutAction extends BaseCasWebflowAction
             val context = new JEEContext(request, response);
 
             var clientName = DelegationWebflowUtils.getDelegatedAuthenticationClientName(requestContext);
-            if (clientName == null) {
+            if (StringUtils.isBlank(clientName)) {
                 clientName = requestContext.getRequestParameters().get(SamlProtocolConstants.PARAMETER_SAML_RELAY_STATE);
                 if (StringUtils.isNotBlank(clientName)) {
                     identityProviders.findClient(clientName, context)
                         .filter(SAML2Client.class::isInstance)
                         .map(SAML2Client.class::cast)
                         .ifPresent(client -> FunctionUtils.doAndHandle(_ -> {
-                            client.init();
+                            DelegatedIdentityProviders.initialize(client);
                             LOGGER.debug("Located client from relay-state [{}]", client);
                             val callContext = new CallContext(context, sessionStore);
                             client.getCredentialsExtractor().extract(callContext).ifPresent(logoutCredentials -> {
@@ -91,11 +91,12 @@ public class DelegatedSaml2ClientFinishLogoutAction extends BaseCasWebflowAction
                 val logoutRedirect = WebUtils.getLogoutRedirectUrl(requestContext, String.class);
                 val delegatedClientLogoutRequest = DelegationWebflowUtils.getDelegatedAuthenticationLogoutRequest(requestContext,
                     DelegatedAuthenticationClientLogoutRequest.class);
+                LOGGER.debug("Delegated SAML2 logout request [{}]", delegatedClientLogoutRequest);
                 identityProviders.findClient(clientName, context)
                     .filter(SAML2Client.class::isInstance)
                     .map(SAML2Client.class::cast)
                     .ifPresent(client -> {
-                        client.init();
+                        DelegatedIdentityProviders.initialize(client);
                         Optional.ofNullable(delegatedClientLogoutRequest)
                             .filter(_ -> StringUtils.isNotBlank(logoutRedirect))
                             .filter(_ -> StringUtils.isNotBlank(delegatedClientLogoutRequest.getLocation()))

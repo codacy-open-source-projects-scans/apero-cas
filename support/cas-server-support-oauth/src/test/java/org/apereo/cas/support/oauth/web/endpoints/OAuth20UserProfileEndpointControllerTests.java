@@ -25,7 +25,6 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.TestPropertySource;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -48,37 +47,26 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
     @Autowired
     @Qualifier("defaultAccessTokenFactory")
     private OAuth20AccessTokenFactory accessTokenFactory;
-    
-    @Autowired
-    @Qualifier("oauthProfileController")
-    private OAuth20UserProfileEndpointController oAuth20ProfileController;
 
     @Test
     void verifyNoGivenAccessToken() throws Throwable {
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(),
             CONTEXT + OAuth20Constants.PROFILE_URL);
-        val mockResponse = new MockHttpServletResponse();
-
-        val entity = oAuth20ProfileController.handlePostRequest(mockRequest, mockResponse);
-
-        assertEquals(HttpStatus.UNAUTHORIZED, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
-        assertNotNull(entity.getBody());
-        assertTrue(entity.getBody().toString().contains(OAuth20Constants.MISSING_ACCESS_TOKEN));
+        mockRequest.setMethod(HttpMethod.POST.name());
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
+        assertTrue(result.getResponse().getContentAsString().contains(OAuth20Constants.MISSING_ACCESS_TOKEN));
     }
 
     @Test
     void verifyNoExistingAccessToken() throws Throwable {
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.setParameter(OAuth20Constants.ACCESS_TOKEN, "DOES NOT EXIST");
-        val mockResponse = new MockHttpServletResponse();
-
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-
-        assertEquals(HttpStatus.UNAUTHORIZED, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
-        assertNotNull(entity.getBody());
-        assertTrue(entity.getBody().toString().contains(OAuth20Constants.EXPIRED_ACCESS_TOKEN));
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
+        assertTrue(result.getResponse().getContentAsString().contains(OAuth20Constants.EXPIRED_ACCESS_TOKEN));
     }
 
     @Test
@@ -93,19 +81,16 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
 
         val code = addCode(principal, addRegisteredService());
         val accessToken = expiringAccessTokenFactory.create(RegisteredServiceTestUtils.getService(), authentication,
-            new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code.getId(), code.getClientId(), new HashMap<>(),
+            new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code, code.getClientId(), new HashMap<>(),
             OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
         ticketRegistry.addTicket(accessToken);
 
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.setParameter(OAuth20Constants.ACCESS_TOKEN, accessToken.getId());
-        val mockResponse = new MockHttpServletResponse();
-
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-        assertEquals(HttpStatus.UNAUTHORIZED, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
-        assertNotNull(entity.getBody());
-        assertTrue(entity.getBody().toString().contains(OAuth20Constants.EXPIRED_ACCESS_TOKEN));
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
+        assertTrue(result.getResponse().getContentAsString().contains(OAuth20Constants.EXPIRED_ACCESS_TOKEN));
     }
 
     @Test
@@ -120,7 +105,7 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
         val code = addCode(principal, addRegisteredService());
 
         val accessToken = (OAuth20DefaultAccessToken) accessTokenFactory.create(RegisteredServiceTestUtils.getService(), authentication,
-                new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code.getId(), code.getClientId(), new HashMap<>(),
+                new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code, code.getClientId(), new HashMap<>(),
                 OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
         val jwtAccessTokenWithBadPayload = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.xxxx.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
         accessToken.setId(jwtAccessTokenWithBadPayload);
@@ -128,13 +113,10 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
 
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.setParameter(OAuth20Constants.ACCESS_TOKEN, accessToken.getId());
-        val mockResponse = new MockHttpServletResponse();
-
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-        assertEquals(HttpStatus.UNAUTHORIZED, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
-        assertNotNull(entity.getBody());
-        assertTrue(entity.getBody().toString().contains(OAuth20Constants.MISSING_ACCESS_TOKEN));
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
+        assertTrue(result.getResponse().getContentAsString().contains(OAuth20Constants.MISSING_ACCESS_TOKEN));
     }
 
     @Test
@@ -149,20 +131,17 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
         val code = addCode(principal, addRegisteredService());
 
         val accessToken = accessTokenFactory.create(RegisteredServiceTestUtils.getService(), authentication,
-            new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code.getId(), code.getClientId(), new HashMap<>(),
+            new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code, code.getClientId(), new HashMap<>(),
             OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
         ticketRegistry.addTicket(accessToken);
 
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.setParameter(OAuth20Constants.ACCESS_TOKEN, accessToken.getId());
-        val mockResponse = new MockHttpServletResponse();
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.OK.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
 
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-
-        assertEquals(HttpStatus.OK, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
-
-        val receivedBody = (Map) entity.getBody();
+        val receivedBody = MAPPER.readValue(result.getResponse().getContentAsByteArray(), Map.class);
         assertEquals(ID, receivedBody.get("id"));
         val attributes = (Map<String, ?>) receivedBody.get("attributes");
         assertEquals(VALUE, attributes.get(NAME).toString());
@@ -182,18 +161,16 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
 
         val accessToken = accessTokenFactory.create(RegisteredServiceTestUtils.getService(), authentication,
             new MockTicketGrantingTicket("casuser"), new ArrayList<>(),
-            code.getId(), code.getClientId(), new HashMap<>(),
+            code, code.getClientId(), new HashMap<>(),
             OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
         accessToken.getTicketGrantingTicket().markTicketExpired();
         ticketRegistry.addTicket(accessToken);
 
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.setParameter(OAuth20Constants.ACCESS_TOKEN, accessToken.getId());
-        val mockResponse = new MockHttpServletResponse();
-
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-        assertEquals(HttpStatus.OK, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.OK.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
 
         val expectedObj = MAPPER.createObjectNode();
         val objectNode = MAPPER.createObjectNode();
@@ -205,7 +182,7 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
         expectedObj.put("id", ID);
         expectedObj.set("attributes", objectNode);
 
-        val receivedBody = (Map) entity.getBody();
+        val receivedBody = MAPPER.readValue(result.getResponse().getContentAsByteArray(), Map.class);
         assertEquals(ID, receivedBody.get("id"));
         val attributes = (Map<String, ?>) receivedBody.get("attributes");
         assertEquals(VALUE, attributes.get(NAME).toString());
@@ -224,18 +201,17 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
         val code = addCode(principal, addRegisteredService());
         val accessToken = accessTokenFactory.create(RegisteredServiceTestUtils.getService(), authentication,
             new MockTicketGrantingTicket("casuser"), new ArrayList<>(),
-            code.getId(), code.getClientId(), new HashMap<>(),
+            code, code.getClientId(), new HashMap<>(),
             OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
         ticketRegistry.addTicket(accessToken);
 
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.addHeader(HttpHeaders.AUTHORIZATION, OAuth20Constants.TOKEN_TYPE_BEARER + ' ' + accessToken.getId());
-        val mockResponse = new MockHttpServletResponse();
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-        assertEquals(HttpStatus.OK, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.OK.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
 
-        val receivedBody = (Map) entity.getBody();
+        val receivedBody = MAPPER.readValue(result.getResponse().getContentAsByteArray(), Map.class);
         assertEquals(ID, receivedBody.get("id"));
         val attributes = (Map<String, ?>) receivedBody.get("attributes");
         assertEquals(VALUE, attributes.get(NAME).toString());
@@ -254,19 +230,17 @@ class OAuth20UserProfileEndpointControllerTests extends AbstractOAuth20Tests {
         val code = addCode(principal, addRegisteredService());
 
         val accessToken = accessTokenFactory.create(RegisteredServiceTestUtils.getService(), authentication,
-            new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code.getId(), code.getClientId(), new HashMap<>(),
+            new MockTicketGrantingTicket("casuser"), new ArrayList<>(), code, code.getClientId(), new HashMap<>(),
             OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
         ticketRegistry.addTicket(accessToken);
 
         val mockRequest = new MockHttpServletRequest(HttpMethod.GET.name(), CONTEXT + OAuth20Constants.PROFILE_URL);
         mockRequest.setParameter(OAuth20Constants.ACCESS_TOKEN, accessToken.getId());
-        val mockResponse = new MockHttpServletResponse();
+        val result = performOAuthRequest(mockRequest);
+        assertEquals(HttpStatus.OK.value(), result.getResponse().getStatus());
+        assertTrue(MediaType.parseMediaType(result.getResponse().getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON));
 
-        val entity = oAuth20ProfileController.handleGetRequest(mockRequest, mockResponse);
-        assertEquals(HttpStatus.OK, entity.getStatusCode());
-        assertEquals(MediaType.APPLICATION_JSON_VALUE, mockResponse.getContentType());
-
-        val receivedBody = (Map) entity.getBody();
+        val receivedBody = MAPPER.readValue(result.getResponse().getContentAsByteArray(), Map.class);
         assertEquals(ID, receivedBody.get("id"));
         val attributes = (Map<String, ?>) receivedBody.get("attributes");
         assertEquals("admin", attributes.get("groupMembership").toString());

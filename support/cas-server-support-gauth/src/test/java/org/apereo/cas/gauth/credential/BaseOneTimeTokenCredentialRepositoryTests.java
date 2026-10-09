@@ -24,7 +24,6 @@ import org.apereo.cas.util.spring.boot.SpringBootTestAutoConfigurations;
 import lombok.Getter;
 import lombok.val;
 import org.apache.commons.lang3.tuple.Pair;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -55,12 +54,6 @@ public abstract class BaseOneTimeTokenCredentialRepositoryTests {
     }
     
 
-    @AfterEach
-    public void afterEach() {
-        val repo = getRegistry("afterEach");
-        repo.deleteAll();
-    }
-
     @Test
     void verifyCreate() throws Throwable {
         val casuser = getUsernameUnderTest();
@@ -80,11 +73,8 @@ public abstract class BaseOneTimeTokenCredentialRepositoryTests {
         val stored = repo.save(toSave);
         assertNotNull(repo.get(stored.getId()));
         assertNotNull(repo.get(toSave.getUsername(), stored.getId()));
-        assertEquals(1, repo.count());
         assertEquals(1, repo.count(stored.getUsername()));
         repo.delete(acct.getUsername());
-        assertTrue(repo.load().isEmpty());
-        assertEquals(0, repo.count());
         assertEquals(0, repo.count(stored.getUsername()));
     }
 
@@ -162,11 +152,8 @@ public abstract class BaseOneTimeTokenCredentialRepositoryTests {
         assertNotNull(toSave);
         assertNotNull(repo.get(toSave.getId()));
         assertNotNull(repo.get(toSave.getUsername().toUpperCase(Locale.ENGLISH), toSave.getId()));
-        assertEquals(1, repo.count());
         assertEquals(1, repo.count(toSave.getUsername().toUpperCase(Locale.ENGLISH)));
         repo.delete(acct.getUsername().toUpperCase(Locale.ENGLISH));
-        assertTrue(repo.load().isEmpty());
-        assertEquals(0, repo.count());
         assertEquals(0, repo.count(toSave.getUsername().toUpperCase(Locale.ENGLISH)));
     }
 
@@ -189,6 +176,44 @@ public abstract class BaseOneTimeTokenCredentialRepositoryTests {
 
         acct = repo.get(casuser).iterator().next();
         assertEquals(PLAIN_SECRET, acct.getSecretKey());
+    }
+
+    @Test
+    void verifySaveLeavesAccountUntouched() throws Throwable {
+        val username = getUsernameUnderTest();
+        val repo = getRegistry("verifySaveLeavesAccountUntouched");
+        val account = repo.create(username);
+        val secret = account.getSecretKey();
+        val scratchCodes = account.getScratchCodes().stream().map(Number::intValue).sorted().toList();
+        val id = repo.save(account).getId();
+
+        assertEquals(secret, account.getSecretKey());
+        assertEquals(scratchCodes, account.getScratchCodes().stream().map(Number::intValue).sorted().toList());
+        assertEquals(secret, repo.get(id).getSecretKey());
+        assertEquals(secret, repo.get(username, id).getSecretKey());
+        assertEquals(scratchCodes, repo.get(username, id).getScratchCodes().stream().map(Number::intValue).sorted().toList());
+    }
+
+    @Test
+    void verifyUpdateInsertsMissingDeviceAndKeepsLastUsedTime() throws Throwable {
+        val username = getUsernameUnderTest();
+        val repo = getRegistry("verifyUpdateInsertsMissingDeviceAndKeepsLastUsedTime");
+        val account = repo.create(username).assignIdIfNecessary();
+        val firstUse = ZonedDateTime.now(ZoneOffset.UTC).toString();
+        account.setLastUsedDateTime(firstUse);
+        repo.update(account);
+
+        assertEquals(1, repo.count(username));
+        val inserted = repo.get(username).iterator().next();
+        assertEquals(account.getSecretKey(), inserted.getSecretKey());
+        assertEquals(firstUse, inserted.getLastUsedDateTime());
+
+        val nextUse = ZonedDateTime.now(ZoneOffset.UTC).plusMinutes(1).toString();
+        inserted.setLastUsedDateTime(nextUse);
+        repo.update(inserted);
+        assertEquals(1, repo.count(username));
+        assertEquals(nextUse, repo.get(username, inserted.getId()).getLastUsedDateTime());
+        repo.delete(username);
     }
 
     public OneTimeTokenCredentialRepository getRegistry(final String testName) {

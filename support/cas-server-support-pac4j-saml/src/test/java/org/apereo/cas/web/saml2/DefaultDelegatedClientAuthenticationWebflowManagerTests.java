@@ -8,9 +8,12 @@ import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.services.ServicesManager;
 import org.apereo.cas.services.UnauthorizedServiceException;
 import org.apereo.cas.test.CasTestExtension;
+import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.ticket.registry.TicketRegistry;
 import org.apereo.cas.util.MockRequestContext;
 import org.apereo.cas.util.RandomUtils;
+import org.apereo.cas.web.flow.DefaultDelegatedClientAuthenticationWebflowManager;
+import org.apereo.cas.web.flow.DelegatedClientAuthenticationConfigurationContext;
 import org.apereo.cas.web.flow.DelegatedClientAuthenticationWebflowManager;
 import lombok.val;
 import net.shibboleth.shared.resolver.CriteriaSet;
@@ -31,6 +34,7 @@ import org.opensaml.saml.saml2.metadata.IDPSSODescriptor;
 import org.opensaml.saml.saml2.metadata.SPSSODescriptor;
 import org.pac4j.cas.client.CasClient;
 import org.pac4j.cas.config.CasConfiguration;
+import org.pac4j.core.client.Client;
 import org.pac4j.core.context.CallContext;
 import org.pac4j.core.context.session.SessionStore;
 import org.pac4j.jee.context.JEEContext;
@@ -47,6 +51,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.web.servlet.DispatcherServlet;
 import org.springframework.web.servlet.i18n.SessionLocaleResolver;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
  * This is {@link DefaultDelegatedClientAuthenticationWebflowManagerTests}.
@@ -81,6 +86,10 @@ class DefaultDelegatedClientAuthenticationWebflowManagerTests {
     @Autowired
     @Qualifier(ServicesManager.BEAN_NAME)
     private ServicesManager servicesManager;
+
+    @Autowired
+    @Qualifier(DelegatedClientAuthenticationConfigurationContext.BEAN_NAME)
+    private DelegatedClientAuthenticationConfigurationContext configurationContext;
 
     @Autowired
     private ConfigurableApplicationContext applicationContext;
@@ -122,11 +131,28 @@ class DefaultDelegatedClientAuthenticationWebflowManagerTests {
         val client = new SAML2Client(config);
         val ticket = delegatedClientAuthenticationWebflowManager.store(requestContext, context, client);
         assertNotNull(ticketRegistry.getTicket(ticket.getId()));
-        assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).get());
+        assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).orElseThrow());
         requestContext.setParameter("RelayState", ticket.getId());
         val service = delegatedClientAuthenticationWebflowManager.retrieve(requestContext, context, client);
         assertNotNull(service);
         assertNull(ticketRegistry.getTicket(ticket.getId()));
+    }
+
+    @Test
+    void verifySamlStoreOperationWithTicketStoredUnderAnotherId() throws Throwable {
+        val storedTicketId = "TST-" + RandomUtils.randomAlphanumeric(128);
+        val storedTicket = mock(Ticket.class);
+        when(storedTicket.getId()).thenReturn(storedTicketId);
+        val registry = mock(TicketRegistry.class);
+        when(registry.addTicket(any(Ticket.class))).thenReturn(storedTicket);
+
+        val managerContext = spy(configurationContext);
+        doReturn(registry).when(managerContext).getTicketRegistry();
+        val manager = new DefaultDelegatedClientAuthenticationWebflowManager(managerContext);
+        val ticket = manager.store(requestContext, context, new SAML2Client(new SAML2Configuration()));
+        assertNotEquals(storedTicketId, ticket.getId());
+        assertEquals("SAML2Client", ticket.getProperty(Client.class.getName(), String.class));
+        assertEquals(storedTicketId, delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).orElseThrow());
     }
 
     @Test
@@ -141,7 +167,7 @@ class DefaultDelegatedClientAuthenticationWebflowManagerTests {
         val pair = setupTestContextFor(Files.createTempFile("sp-metadata", ".xml").toFile().getAbsolutePath(), "cas.example.sp");
         val ticket = delegatedClientAuthenticationWebflowManager.store(requestContext, context, pair.getLeft());
         assertNotNull(ticketRegistry.getTicket(ticket.getId()));
-        assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).get());
+        assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).orElseThrow());
 
         val builder = new SAML2AuthnRequestBuilder();
         val result = builder.build(pair.getRight());
@@ -165,7 +191,7 @@ class DefaultDelegatedClientAuthenticationWebflowManagerTests {
         val pair = setupTestContextFor(Files.createTempFile("sp-metadata", ".xml").toFile().getAbsolutePath(), "cas.example.sp");
         val ticket = delegatedClientAuthenticationWebflowManager.store(requestContext, context, pair.getLeft());
         assertNotNull(ticketRegistry.getTicket(ticket.getId()));
-        assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).get());
+        assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context, SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).orElseThrow());
 
         val builder = new SAML2AuthnRequestBuilder();
         val result = builder.build(pair.getRight());
@@ -195,7 +221,7 @@ class DefaultDelegatedClientAuthenticationWebflowManagerTests {
         val ticket = delegatedClientAuthenticationWebflowManager.store(requestContext, context, client);
         assertNotNull(ticketRegistry.getTicket(ticket.getId()));
         assertEquals(ticket.getId(), delegatedClientDistributedSessionStore.get(context,
-            SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).get());
+            SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE).orElseThrow());
         requestContext.setParameter("RelayState", ticket.getId());
         ticket.markTicketExpired();
         assertThrows(UnauthorizedServiceException.class,
@@ -208,7 +234,7 @@ class DefaultDelegatedClientAuthenticationWebflowManagerTests {
         val saml2ClientConfiguration = new SAML2Configuration(keystorePath, "changeit", "changeit", idpMetadata);
         saml2ClientConfiguration.setServiceProviderEntityId(spEntityId);
         saml2ClientConfiguration.setServiceProviderMetadataPath(spMetadataPath);
-        saml2ClientConfiguration.setForceKeystoreGeneration(true);
+        saml2ClientConfiguration.getKeystore().setForceKeystoreGeneration(true);
         saml2ClientConfiguration.setForceServiceProviderMetadataGeneration(true);
         saml2ClientConfiguration.init();
 

@@ -45,5 +45,4 @@ class OidcRegisteredServiceJsonWebKeystoreCacheLoaderTests extends AbstractOidcT
         assertTrue(oidcServiceJsonWebKeystoreCache.get(
             new OidcJsonWebKeyCacheKey(service, OidcJsonWebKeyUsage.SIGNING)).isPresent());
     }
-
 }

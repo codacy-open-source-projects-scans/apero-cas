@@ -67,6 +67,61 @@ class GoogleAuthenticatorDeleteAccountActionTests {
     }
     
     @Test
+    void verifyDeleteDeviceOfAnotherUser() throws Throwable {
+        val context = MockRequestContext.create(applicationContext);
+        val acct = GoogleAuthenticatorAccount
+            .builder()
+            .username(UUID.randomUUID().toString())
+            .name(UUID.randomUUID().toString())
+            .secretKey(UUID.randomUUID().toString())
+            .validationCode(123456)
+            .scratchCodes(List.of(287345))
+            .properties(new ArrayList<>(List.of(GoogleAuthenticatorDeleteAccountAction.ACCOUNT_PROPERTY_REMOVAL_VERIFIED)))
+            .build();
+        val accountId = googleAuthenticatorAccountRegistry.save(acct).getId();
+
+        WebUtils.putAuthentication(RegisteredServiceTestUtils.getAuthentication(UUID.randomUUID().toString()), context);
+        context.setParameter(OneTimeTokenAccountConfirmSelectionRegistrationAction.REQUEST_PARAMETER_ACCOUNT_ID, String.valueOf(accountId));
+        context.setParameter(OneTimeTokenAccountSaveRegistrationAction.REQUEST_PARAMETER_VALIDATE, "false");
+        assertThrows(FailedLoginException.class, () -> action.execute(context));
+        assertNotNull(googleAuthenticatorAccountRegistry.get(accountId));
+    }
+
+    @Test
+    void verifyDeleteWithExpiredVerification() throws Throwable {
+        val context = MockRequestContext.create(applicationContext);
+        val expiredAt = Instant.now(Clock.systemUTC())
+            .minus(GoogleAuthenticatorAccountVerificationUtils.VERIFICATION_LIFETIME.multipliedBy(2)).toEpochMilli();
+        val acct = GoogleAuthenticatorAccount
+            .builder()
+            .username(UUID.randomUUID().toString())
+            .name(UUID.randomUUID().toString())
+            .secretKey(UUID.randomUUID().toString())
+            .validationCode(123456)
+            .scratchCodes(List.of(387345))
+            .properties(new ArrayList<>(List.of(
+                GoogleAuthenticatorDeleteAccountAction.ACCOUNT_PROPERTY_REMOVAL_VERIFIED,
+                GoogleAuthenticatorDeleteAccountAction.ACCOUNT_PROPERTY_REMOVAL_VERIFIED + ':' + expiredAt)))
+            .build();
+        val accountId = googleAuthenticatorAccountRegistry.save(acct).getId();
+
+        WebUtils.putAuthentication(RegisteredServiceTestUtils.getAuthentication(acct.getUsername()), context);
+        context.setParameter(OneTimeTokenAccountConfirmSelectionRegistrationAction.REQUEST_PARAMETER_ACCOUNT_ID, String.valueOf(accountId));
+        context.setParameter(OneTimeTokenAccountSaveRegistrationAction.REQUEST_PARAMETER_VALIDATE, "false");
+        assertThrows(FailedLoginException.class, () -> action.execute(context));
+        assertNotNull(googleAuthenticatorAccountRegistry.get(accountId));
+    }
+
+    @Test
+    void verifyDeleteWithInvalidDeviceId() throws Throwable {
+        val context = MockRequestContext.create(applicationContext);
+        WebUtils.putAuthentication(RegisteredServiceTestUtils.getAuthentication(UUID.randomUUID().toString()), context);
+        context.setParameter(OneTimeTokenAccountConfirmSelectionRegistrationAction.REQUEST_PARAMETER_ACCOUNT_ID, "not-a-number");
+        context.setParameter(OneTimeTokenAccountSaveRegistrationAction.REQUEST_PARAMETER_VALIDATE, "false");
+        assertThrows(FailedLoginException.class, () -> action.execute(context));
+    }
+
+    @Test
     void verifyOperation() throws Throwable {
         val context = MockRequestContext.create(applicationContext);
         var acct = GoogleAuthenticatorAccount
@@ -90,7 +145,9 @@ class GoogleAuthenticatorDeleteAccountActionTests {
         assertEquals(CasWebflowConstants.TRANSITION_ID_SUCCESS, action.execute(context).getId());
 
         acct = (GoogleAuthenticatorAccount) googleAuthenticatorAccountRegistry.get(acct.getId());
-        assertEquals(GoogleAuthenticatorDeleteAccountAction.ACCOUNT_PROPERTY_REMOVAL_VERIFIED, acct.getProperties().getFirst());
+        assertTrue(acct.getProperties().getFirst().startsWith(GoogleAuthenticatorDeleteAccountAction.ACCOUNT_PROPERTY_REMOVAL_VERIFIED + ':'));
+        assertTrue(acct.getScratchCodes().isEmpty());
+        assertNotNull(acct.getLastUsedDateTime());
 
         context.setParameter(OneTimeTokenAccountSaveRegistrationAction.REQUEST_PARAMETER_VALIDATE, "false");
         assertEquals(CasWebflowConstants.TRANSITION_ID_SUCCESS, action.execute(context).getId());

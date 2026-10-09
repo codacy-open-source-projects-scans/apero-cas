@@ -93,10 +93,12 @@ public abstract class AbstractTicketRegistry implements TicketRegistry {
 
     @Override
     public long deleteTicketsFor(final String principalId) {
-        return getTickets(ticket -> ticket instanceof final AuthenticationAwareTicket aat
-            && Strings.CI.equals(aat.getAuthentication().getPrincipal().getId(), principalId))
-            .mapToLong(ticket -> FunctionUtils.doAndHandle(() -> deleteTicket(ticket), t -> 0).get())
-            .sum();
+        try (val tickets = getTickets(ticket -> ticket instanceof final AuthenticationAwareTicket aat
+            && Strings.CI.equals(aat.getAuthentication().getPrincipal().getId(), principalId))) {
+            return tickets
+                .mapToLong(ticket -> FunctionUtils.doAndHandle(() -> deleteTicket(ticket), t -> 0).get())
+                .sum();
+        }
     }
 
     @Override
@@ -211,7 +213,9 @@ public abstract class AbstractTicketRegistry implements TicketRegistry {
             }
             return false;
         };
-        return getTickets(ticketPredicate).count();
+        try (val tickets = getTickets(ticketPredicate)) {
+            return tickets.count();
+        }
     }
 
     @Override
@@ -237,15 +241,14 @@ public abstract class AbstractTicketRegistry implements TicketRegistry {
     }
 
     @Override
-    public long countTicketsFor(final Service service) {
+    public Stream<? extends Ticket> getTicketsFor(final Service service) {
         return stream()
             .map(this::decodeTicket)
             .filter(ServiceAwareTicket.class::isInstance)
             .filter(ticket -> !ticket.isExpired())
             .map(ServiceAwareTicket.class::cast)
             .filter(ticket -> Objects.nonNull(ticket.getService()))
-            .filter(ticket -> ticket.getService().getId().equals(service.getId()))
-            .count();
+            .filter(ticket -> ticket.getService().getId().equals(service.getId()));
     }
 
     @Override

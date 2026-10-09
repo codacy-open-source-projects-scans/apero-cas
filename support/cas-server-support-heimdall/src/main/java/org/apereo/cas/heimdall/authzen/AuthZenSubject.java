@@ -1,14 +1,14 @@
 package org.apereo.cas.heimdall.authzen;
 
 import module java.base;
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.SuperBuilder;
 import lombok.ToString;
 import lombok.With;
-import lombok.experimental.SuperBuilder;
 import org.springframework.validation.annotation.Validated;
 
 /**
@@ -18,6 +18,7 @@ import org.springframework.validation.annotation.Validated;
  * @since 7.3.0
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 @NoArgsConstructor
 @Validated
 @ToString
@@ -32,14 +33,4 @@ public class AuthZenSubject implements Serializable {
     private String type;
     private String id;
     private Map<String, Object> properties;
-
-    @JsonIgnore
-    public Optional<String> getIpAddress() {
-        return Optional.ofNullable((String) properties.get("ip_address"));
-    }
-
-    @JsonIgnore
-    public Optional<String> getDeviceId() {
-        return Optional.ofNullable((String) properties.get("device_id"));
-    }
 }

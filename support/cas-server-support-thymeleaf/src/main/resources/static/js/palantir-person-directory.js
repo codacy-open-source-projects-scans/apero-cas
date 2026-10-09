@@ -43,6 +43,7 @@ async function initializePersonDirectoryOperations() {
     attrDefToolbar.innerHTML = attrDefToolbarEntries;
 
     const attributeDefinitionsTable = $("#attributeDefinitionsTable").DataTable({
+        deferRender: true,
         pageLength: 10,
         autoWidth: false,
         columnDefs: [
@@ -57,12 +58,110 @@ async function initializePersonDirectoryOperations() {
         }
     });
 
+    const attributeRepositoriesToolbar = document.createElement("div");
+    if (attributeRepositoryPropertiesMutable()) {
+        attributeRepositoriesToolbar.innerHTML = `
+            <button type="button" id="newAttributeRepositoryButton"
+                    onclick="openNewAttributeRepositoryDialog()"
+                    title="Create a new attribute repository"
+                    class="mdc-button mdc-button--raised">
+                <span class="mdc-button__label"><i class="mdc-tab__icon mdi mdi-plus-thick" aria-hidden="true"></i>New</span>
+            </button>
+        `;
+    }
+
     const attributeRepositoriesTable = $("#attributeRepositoriesTable").DataTable({
         pageLength: 10,
         autoWidth: false,
+        layout: {
+            topStart: attributeRepositoriesToolbar
+        },
+        columns: [
+            {
+                data: "id",
+                render: (data, type) => type === "display"
+                    ? `<code>${escapePersonDirectoryHtml(data)}</code>`
+                    : data
+            }
+        ],
         drawCallback: () => {
             $("#attributeRepositoriesTable tr").addClass("mdc-data-table__row");
             $("#attributeRepositoriesTable td").addClass("mdc-data-table__cell");
+        }
+    });
+
+    const attributeRepositoryConfigTable = $("#attributeRepositoryConfigTable").DataTable({
+        pageLength: 10,
+        autoWidth: false,
+        columns: [
+            {
+                data: "property",
+                render: (data, type) => type === "display"
+                    ? `<code>${escapePersonDirectoryHtml(data)}</code>`
+                    : data
+            },
+            {
+                data: "value",
+                className: "dt-left wrap",
+                render: (data, type) => type === "display"
+                    ? `<code>${escapePersonDirectoryHtml(formatAttributeRepositoryConfigValue(data))}</code>`
+                    : formatAttributeRepositoryConfigValue(data)
+            }
+        ],
+        drawCallback: () => {
+            $("#attributeRepositoryConfigTable tr").addClass("mdc-data-table__row");
+            $("#attributeRepositoryConfigTable td").addClass("mdc-data-table__cell");
+        }
+    });
+
+    $("#attributeRepositoryConfigDialog").dialog({
+        autoOpen: false,
+        modal: true,
+        width: Math.min($(window).width() * 0.75, 1200),
+        height: Math.min($(window).height() * 0.75, 800),
+        position: {
+            my: "center top",
+            at: "center top+100",
+            of: window
+        },
+        open: () => attributeRepositoryConfigTable.columns.adjust(),
+        buttons: {
+            Close: function () {
+                $(this).dialog("close");
+            }
+        }
+    });
+
+    function showAttributeRepositoryConfig(entry) {
+        attributeRepositoryConfigTable.clear();
+        const flattened = flattenAttributeRepositoryConfig(entry.config ?? {});
+        for (const [property, value] of Object.entries(flattened)) {
+            attributeRepositoryConfigTable.row.add({
+                property: property,
+                value: value
+            });
+        }
+        if (Object.keys(flattened).length === 0) {
+            attributeRepositoryConfigTable.row.add({
+                property: "configuration",
+                value: "N/A"
+            });
+        }
+        attributeRepositoryConfigTable.draw();
+        $("#attributeRepositoryConfigDialog").dialog("option", "title", `Attribute Repository Configuration: ${entry.id}`);
+        $("#attributeRepositoryConfigDialog").dialog("open");
+    }
+
+    initializeDataTableContextMenu({
+        table: attributeRepositoriesTable,
+        selector: "#attributeRepositoriesTable tbody tr",
+        items: {
+            view: {name: "View Configuration", icon: contextMenuIcon("mdi-eye")}
+        },
+        callback: (key, context) => {
+            if (key === "view") {
+                showAttributeRepositoryConfig(context.rowData);
+            }
         }
     });
 
@@ -143,26 +242,12 @@ async function initializePersonDirectoryOperations() {
                     5: `<code>${definition.singleValue ? checked : unchecked}</code>`,
                     6: `<code>${definition.attribute ?? "N/A"}</code>`,
                     7: `<code>${definition.patternFormat ?? "N/A"}</code>`,
-                    8: `<code>${definition.canonicalizationMode ?? "N/A"}</code>`,
-                    9: `<code>${definition.flattened ? checked : unchecked}</code>`,
-                    10: `<code>${definition?.friendlyName ?? "N/A"}</code>`,
-                    11: `<code>${definition?.urn ?? "N/A"}</code>`,
-                    12: `<button type="button" name="viewAttrDefn" href="#" data-key="${definition.key}"
-                                title="View Attribute Definition"
-                                class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                            <i class="mdi mdi-eye min-width-32x" aria-hidden="true"></i>
-                         </button>
-                         <button type="button" name="editAttrDefn" href="#" data-key="${definition.key}"
-                                title="Edit Attribute Definition"
-                                class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                            <i class="mdi mdi-pencil min-width-32x" aria-hidden="true"></i>
-                         </button>
-                         <button type="button" name="deleteAttrDefn" href="#" data-key="${definition.key}"
-                                title="Delete Attribute Definition"
-                                class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                            <i class="mdi mdi-delete min-width-32x" aria-hidden="true"></i>
-                         </button>`
-                });
+                        8: `<code>${definition.canonicalizationMode ?? "N/A"}</code>`,
+                        9: `<code>${definition.flattened ? checked : unchecked}</code>`,
+                        10: `<code>${definition?.friendlyName ?? "N/A"}</code>`,
+                        11: `<code>${definition?.urn ?? "N/A"}</code>`,
+                        key: definition.key
+                    });
                 attributeDefinitions++;
             }
             if (attributeDefinitions > 0) {
@@ -182,25 +267,623 @@ async function initializePersonDirectoryOperations() {
         hideElements($("#newAttributeDefinitionButton"));
     }
 
-    attributeRepositoriesTable.clear();
-    let attributeRepositories = 0;
-    if (CasActuatorEndpoints.personDirectory()) {
-        $.get(`${CasActuatorEndpoints.personDirectory()}/repositories`, response => {
-            for (const definition of response) {
-                attributeRepositoriesTable.row.add({
-                    0: `<code>${definition.id ?? "N/A"}</code>`,
-                    1: `<code>${definition.order ?? "0"}</code>`,
-                    2: `<code>${JSON.stringify(definition.tags)}</code>`
-                });
-                attributeRepositories++;
+    reloadAttributeRepositoriesTable();
+}
+
+function attributeRepositoryPropertiesMutable() {
+    return PalantirDashboardConfiguration.mutablePropertySourcesAvailable() && CasActuatorEndpoints.casConfig();
+}
+
+function normalizeAttributeRepositoryEntry(entry) {
+    const ids = entry?.left ?? entry?.key ?? entry?.ids ?? entry?.id ?? [];
+    return {
+        id: Array.isArray(ids) ? ids.join(", ") : `${ids ?? "N/A"}`,
+        config: entry?.right ?? entry?.value ?? entry?.config ?? entry?.configuration ?? {}
+    };
+}
+
+function reloadAttributeRepositoriesTable() {
+    const table = $("#attributeRepositoriesTable").DataTable();
+    table.clear();
+    $("#attributeRepositoriesTab").toggle(attributeRepositoryPropertiesMutable());
+    if (!CasActuatorEndpoints.personDirectory()) {
+        table.draw();
+        return;
+    }
+
+    $.get(`${CasActuatorEndpoints.personDirectory()}/repositories`, response => {
+        for (const definition of response) {
+            table.row.add(normalizeAttributeRepositoryEntry(definition));
+        }
+        table.draw();
+        $("#attributeRepositoriesTab").toggle(response.length > 0 || attributeRepositoryPropertiesMutable());
+    }).fail((xhr, status, error) => {
+        console.error("Error fetching data:", error);
+        displayBanner(xhr);
+    });
+}
+
+function collectAttributeRepositoryMappedValues(containerId) {
+    const attributes = {};
+    $(`#${containerId} [data-mapped-input-row='true']`)
+        .each(function () {
+            const row = $(this);
+            const key = row.find("input[data-mapped-field-role='key']").val()?.trim();
+            const value = row.find("input[data-mapped-field-role='value']").val()?.trim();
+            if (key) {
+                attributes[key] = value ?? "";
             }
-            attributeRepositoriesTable.draw();
-            $("#attributeRepositoriesTab").toggle(attributeRepositories > 0);
-        }).fail((xhr, status, error) => {
-            console.error("Error fetching data:", error);
-            displayBanner(xhr);
+        });
+    return attributes;
+}
+
+function collectStubAttributeRepositoryAttributes() {
+    return collectAttributeRepositoryMappedValues("registeredServiceAttributeRepositoryStubAttributeKeyMapContainer");
+}
+
+function collectLdapAttributeRepositoryAttributes() {
+    return collectAttributeRepositoryMappedValues("registeredServiceAttributeRepositoryLdapAttributeKeyMapContainer");
+}
+
+function collectJdbcAttributeRepositoryAttributes() {
+    return collectAttributeRepositoryMappedValues("registeredServiceAttributeRepositoryJdbcAttributeKeyMapContainer");
+}
+
+function collectJdbcAttributeRepositoryColumnMappings() {
+    return collectAttributeRepositoryMappedValues("registeredServiceAttributeRepositoryJdbcColumnMappingKeyMapContainer");
+}
+
+function buildStubAttributeRepositoryPayload(attributes, propertySource) {
+    return Object.entries(attributes).map(([key, value]) => ({
+        name: `cas.authn.attribute-repository.stub.attributes.${key}`,
+        value: value,
+        propertySource: propertySource
+    }));
+}
+
+function buildLdapAttributeRepositoryPayload(configuration, attributes, propertySource) {
+    // The casConfig endpoint replaces [] with one shared next index for this entire LDAP property group.
+    const prefix = "cas.authn.attribute-repository.ldap[]";
+    const properties = {
+        "ldap-url": configuration.ldapUrl,
+        "base-dn": configuration.baseDn,
+        "search-filter": configuration.searchFilter,
+        "bind-dn": configuration.bindDn,
+        "bind-credential": configuration.bindCredential
+    };
+    const payload = Object.entries(properties).map(([name, value]) => ({
+        name: `${prefix}.${name}`,
+        value: value,
+        propertySource: propertySource
+    }));
+    Object.entries(attributes).forEach(([name, value]) => payload.push({
+        name: `${prefix}.attributes.${name}`,
+        value: value,
+        propertySource: propertySource
+    }));
+    return payload;
+}
+
+function buildJdbcAttributeRepositoryPayload(configuration, attributes, columnMappings, propertySource) {
+    // The casConfig endpoint replaces [] with one shared next index for this entire JDBC property group.
+    const prefix = "cas.authn.attribute-repository.jdbc[]";
+    const properties = {
+        "single-row": `${configuration.singleRow}`,
+        user: configuration.user,
+        password: configuration.password,
+        sql: configuration.sql,
+        username: configuration.username,
+        url: configuration.url,
+        dialect: configuration.dialect,
+        "driver-class": configuration.driverClass,
+        "case-canonicalization": configuration.caseCanonicalization,
+        "require-all-attributes": `${configuration.requireAllAttributes}`
+    };
+    const payload = Object.entries(properties).map(([name, value]) => ({
+        name: `${prefix}.${name}`,
+        value: value,
+        propertySource: propertySource
+    }));
+    Object.entries(attributes).forEach(([name, value]) => payload.push({
+        name: `${prefix}.attributes.${name}`,
+        value: value,
+        propertySource: propertySource
+    }));
+    if (!configuration.singleRow) {
+        Object.entries(columnMappings).forEach(([name, value]) => payload.push({
+            name: `${prefix}.column-mappings.${name}`,
+            value: value,
+            propertySource: propertySource
+        }));
+    }
+    return payload;
+}
+
+function createAttributeRepositorySwitch({containerId, id, label, title, selected, cssClasses}) {
+    const buttonId = `${id}Button`;
+    const panel = $("<div>", {
+        id: `${id}SwitchButtonPanel`,
+        class: `d-flex align-items-center gap-2 mb-2 ${cssClasses ?? ""}`
+    });
+    const button = $(`
+        <button id="${buttonId}" name="${buttonId}"
+                class="mdc-switch ${selected ? "mdc-switch--selected" : "mdc-switch--unselected"}"
+                type="button" role="switch" aria-labelledby="${buttonId}Label" aria-checked="${selected}">
+            <div class="mdc-switch__track"></div>
+            <div class="mdc-switch__handle-track">
+                <div class="mdc-switch__handle">
+                    <div class="mdc-switch__shadow"><div class="mdc-elevation-overlay"></div></div>
+                    <div class="mdc-switch__ripple"></div>
+                    <div class="mdc-switch__icons">
+                        <svg class="mdc-switch__icon mdc-switch__icon--on" viewBox="0 0 24 24">
+                            <path d="M19.69,5.23L8.96,15.96l-4.23-4.23L2.96,13.5l6,6L21.46,7L19.69,5.23z"></path>
+                        </svg>
+                        <svg class="mdc-switch__icon mdc-switch__icon--off" viewBox="0 0 24 24">
+                            <path d="M20 13H4v-2h16v2z"></path>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+            <span class="mdc-switch__focus-ring-wrapper"><span class="mdc-switch__focus-ring"></span></span>
+        </button>`).attr("title", title);
+    const switchLabel = $("<label>", {
+        id: `${buttonId}Label`,
+        class: "form-check-label",
+        for: buttonId,
+        text: label
+    });
+    const input = $("<input>", {
+        type: "hidden",
+        id: id,
+        name: id,
+        value: `${selected}`,
+        "data-switch-btn": buttonId
+    });
+    panel.append(button, switchLabel, input);
+    $(`#${containerId}`).append(panel);
+    return input;
+}
+
+function openNewAttributeRepositoryDialog() {
+    if (!attributeRepositoryPropertiesMutable()) {
+        return;
+    }
+
+    CasDiscoveryProfile.fetchIfNeeded().always(() => renderNewAttributeRepositoryDialog());
+}
+
+function renderNewAttributeRepositoryDialog() {
+    if (!attributeRepositoryPropertiesMutable() || $("#newAttributeRepositoryDialog").length > 0) {
+        return;
+    }
+
+    const dialogContainer = $("<div>", {
+        id: "newAttributeRepositoryDialog"
+    });
+    const form = $("<form>", {
+        id: "newAttributeRepositoryForm"
+    });
+    const controlsPanel = $("<div>", {
+        id: "attributeRepositoryControlsPanel",
+        css: {"min-width": "520px"}
+    });
+    form.append(controlsPanel);
+    dialogContainer.append(form).appendTo("body");
+
+    createSelectField({
+        containerId: controlsPanel,
+        labelTitle: "Type:",
+        id: "attributeRepositoryType",
+        options: [
+            {value: "STUB", text: "STUB"},
+            {value: "LDAP", text: "LDAP"},
+            {value: "JDBC", text: "JDBC"}
+        ],
+        cssClasses: "always-show"
+    });
+
+    createInputField({
+        labelTitle: "LDAP URL",
+        name: "attributeRepositoryLdapUrl",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the LDAP URL to connect to.",
+        cssClasses: "LDAP attribute-repository-type hide",
+        paramName: "ldap-url"
+    });
+    createInputField({
+        labelTitle: "Base DN",
+        name: "attributeRepositoryLdapBaseDn",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the base DN to use for LDAP searches.",
+        cssClasses: "LDAP attribute-repository-type hide",
+        paramName: "base-dn"
+    });
+    createInputField({
+        labelTitle: "Search Filter",
+        name: "attributeRepositoryLdapSearchFilter",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the LDAP search filter, such as uid={user}.",
+        cssClasses: "LDAP attribute-repository-type hide",
+        paramName: "search-filter"
+    });
+    createInputField({
+        labelTitle: "Bind DN",
+        name: "attributeRepositoryLdapBindDn",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the bind DN used to connect to LDAP.",
+        cssClasses: "LDAP attribute-repository-type hide",
+        paramName: "bind-dn"
+    });
+    createInputField({
+        labelTitle: "Bind Credential",
+        name: "attributeRepositoryLdapBindCredential",
+        required: true,
+        dataType: "password",
+        containerId: controlsPanel,
+        title: "Define the bind credential/password used to connect to LDAP.",
+        cssClasses: "LDAP attribute-repository-type hide",
+        paramName: "bind-credential"
+    });
+    createMappedInputField({
+        header: "Mapped Attributes",
+        containerId: "attributeRepositoryControlsPanel",
+        keyField: "attributeRepositoryLdapAttributeKey",
+        keyLabel: "LDAP Attribute",
+        valueField: "attributeRepositoryLdapAttributeValue",
+        valueLabel: "CAS Attribute",
+        required: true,
+        cssClasses: "LDAP attribute-repository-type hide",
+        onChangeCallback: () => undefined
+    });
+
+    createMappedInputField({
+        header: "Mapped Attributes",
+        containerId: "attributeRepositoryControlsPanel",
+        keyField: "attributeRepositoryStubAttributeKey",
+        keyLabel: "Attribute",
+        valueField: "attributeRepositoryStubAttributeValue",
+        valueLabel: "Value",
+        required: true,
+        cssClasses: "STUB attribute-repository-type",
+        onChangeCallback: () => undefined
+    });
+
+    createInputField({
+        labelTitle: "User",
+        name: "attributeRepositoryJdbcUser",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the database user used to establish the JDBC connection.",
+        cssClasses: "JDBC attribute-repository-type hide",
+        paramName: "user"
+    });
+    createInputField({
+        labelTitle: "Password",
+        name: "attributeRepositoryJdbcPassword",
+        required: true,
+        dataType: "password",
+        containerId: controlsPanel,
+        title: "Define the password used to establish the JDBC connection.",
+        cssClasses: "JDBC attribute-repository-type hide",
+        paramName: "password"
+    });
+    createInputField({
+        labelTitle: "SQL",
+        name: "attributeRepositoryJdbcSql",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the SQL query used to locate attributes for the principal.",
+        cssClasses: "JDBC attribute-repository-type hide",
+        paramName: "sql"
+    });
+    createInputField({
+        labelTitle: "Username",
+        name: "attributeRepositoryJdbcUsername",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the SQL column that identifies the principal, such as uid.",
+        cssClasses: "JDBC attribute-repository-type hide",
+        paramName: "username"
+    });
+    createInputField({
+        labelTitle: "JDBC URL",
+        name: "attributeRepositoryJdbcUrl",
+        required: true,
+        containerId: controlsPanel,
+        title: "Define the JDBC connection URL.",
+        cssClasses: "JDBC attribute-repository-type hide",
+        paramName: "url"
+    });
+
+    const driverOptions = CasDiscoveryProfile.jdbcDrivers().map(driver => ({value: driver, text: driver}));
+    createMultiSelectField({
+        id: "attributeRepositoryJdbcDriverClass",
+        containerId: "attributeRepositoryControlsPanel",
+        labelTitle: "Driver Class:",
+        paramName: "driver-class",
+        options: driverOptions,
+        allowCreateOption: true,
+        singleSelect: true,
+        cssClasses: "JDBC attribute-repository-type hide"
+    });
+    const dialectOptions = CasDiscoveryProfile.jdbcDialects().map(dialect => ({value: dialect, text: dialect}));
+    createMultiSelectField({
+        id: "attributeRepositoryJdbcDialect",
+        containerId: "attributeRepositoryControlsPanel",
+        labelTitle: "Dialect:",
+        paramName: "dialect",
+        options: dialectOptions,
+        allowCreateOption: true,
+        singleSelect: true,
+        cssClasses: "JDBC attribute-repository-type hide"
+    });
+    createSelectField({
+        containerId: controlsPanel,
+        labelTitle: "Case Canonicalization:",
+        id: "attributeRepositoryJdbcCaseCanonicalization",
+        options: [
+            {value: "NONE", text: "NONE"},
+            {value: "LOWER", text: "LOWER"},
+            {value: "UPPER", text: "UPPER"}
+        ],
+        cssClasses: "JDBC attribute-repository-type hide"
+    });
+    $("#attributeRepositoryJdbcCaseCanonicalization").val("LOWER");
+    createAttributeRepositorySwitch({
+        containerId: "attributeRepositoryControlsPanel",
+        id: "attributeRepositoryJdbcRequireAllAttributes",
+        label: "Require All Attributes",
+        title: "Require every requested attribute to be present in the query result.",
+        selected: true,
+        cssClasses: "JDBC attribute-repository-type hide"
+    });
+    const singleRowInput = createAttributeRepositorySwitch({
+        containerId: "attributeRepositoryControlsPanel",
+        id: "attributeRepositoryJdbcSingleRow",
+        label: "Single Row",
+        title: "Enable when the SQL query returns all attributes in a single row.",
+        selected: false,
+        cssClasses: "JDBC attribute-repository-type hide"
+    });
+    createMappedInputField({
+        header: "Mapped Attributes",
+        containerId: "attributeRepositoryControlsPanel",
+        keyField: "attributeRepositoryJdbcAttributeKey",
+        keyLabel: "JDBC Column",
+        valueField: "attributeRepositoryJdbcAttributeValue",
+        valueLabel: "CAS Attribute",
+        required: true,
+        cssClasses: "JDBC attribute-repository-type hide",
+        onChangeCallback: () => undefined
+    });
+    createMappedInputField({
+        header: "Column Mappings",
+        containerId: "attributeRepositoryControlsPanel",
+        keyField: "attributeRepositoryJdbcColumnMappingKey",
+        keyLabel: "Attribute Name",
+        valueField: "attributeRepositoryJdbcColumnMappingValue",
+        valueLabel: "Attribute Value",
+        cssClasses: "JDBC attribute-repository-type hide",
+        onChangeCallback: () => undefined
+    });
+
+    function updateJdbcColumnMappingControls() {
+        const panel = $("#registeredServiceAttributeRepositoryJdbcColumnMappingKeyMapContainer");
+        const enabled = $("#attributeRepositoryType").val() === "JDBC" && singleRowInput.val() === "false";
+        if (enabled) {
+            showElements(panel);
+        } else {
+            hideElements(panel);
+        }
+        panel.find(":input").prop("disabled", !enabled);
+    }
+    singleRowInput.on("change", updateJdbcColumnMappingControls);
+
+    function selectAttributeRepositoryType(type) {
+        hideElements(dialogContainer.find(".attribute-repository-type"));
+        showElements(dialogContainer.find(`.${type}`));
+        const typeControls = dialogContainer.find(`.${type}`);
+        dialogContainer.find(".attribute-repository-type").filter(":input")
+            .add(dialogContainer.find(".attribute-repository-type :input"))
+            .prop("disabled", true);
+        typeControls.filter(":input").add(typeControls.find(":input")).prop("disabled", false);
+        updateJdbcColumnMappingControls();
+        $("#addAttributeRepositoryButton").prop("disabled", false).button("refresh");
+    }
+
+    function submitAttributeRepository(type, propertySource) {
+        let payload;
+        if (type === "LDAP") {
+            const configuration = {
+                ldapUrl: $("#attributeRepositoryLdapUrl").val().trim(),
+                baseDn: $("#attributeRepositoryLdapBaseDn").val().trim(),
+                searchFilter: $("#attributeRepositoryLdapSearchFilter").val().trim(),
+                bindDn: $("#attributeRepositoryLdapBindDn").val().trim(),
+                bindCredential: $("#attributeRepositoryLdapBindCredential").val()
+            };
+            payload = buildLdapAttributeRepositoryPayload(
+                configuration, collectLdapAttributeRepositoryAttributes(), propertySource);
+        } else if (type === "JDBC") {
+            const configuration = {
+                singleRow: $("#attributeRepositoryJdbcSingleRow").val() === "true",
+                user: $("#attributeRepositoryJdbcUser").val().trim(),
+                password: $("#attributeRepositoryJdbcPassword").val(),
+                sql: $("#attributeRepositoryJdbcSql").val().trim(),
+                username: $("#attributeRepositoryJdbcUsername").val().trim(),
+                url: $("#attributeRepositoryJdbcUrl").val().trim(),
+                dialect: $("#attributeRepositoryJdbcDialect").val(),
+                driverClass: $("#attributeRepositoryJdbcDriverClass").val(),
+                caseCanonicalization: $("#attributeRepositoryJdbcCaseCanonicalization").val(),
+                requireAllAttributes: $("#attributeRepositoryJdbcRequireAllAttributes").val() === "true"
+            };
+            payload = buildJdbcAttributeRepositoryPayload(
+                configuration,
+                collectJdbcAttributeRepositoryAttributes(),
+                collectJdbcAttributeRepositoryColumnMappings(),
+                propertySource);
+        } else {
+            payload = buildStubAttributeRepositoryPayload(collectStubAttributeRepositoryAttributes(), propertySource);
+        }
+
+        $.ajax({
+            url: `${CasActuatorEndpoints.casConfig()}/update`,
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(payload),
+            success: () => {
+                dialogContainer.dialog("close");
+                $.get(CasActuatorEndpoints.env(), response => {
+                    reloadConfigurationTable(response);
+                    refreshCasServerConfiguration(`New ${type} Attribute Repository Created`);
+                }).fail(xhr => displayBanner(xhr));
+            },
+            error: (xhr, status, error) => {
+                console.error(`Error: ${status} / ${error} / ${xhr.responseText}`);
+                displayBanner(xhr);
+            }
         });
     }
+
+    dialogContainer.dialog({
+        title: "New Attribute Repository",
+        modal: true,
+        width: 700,
+        autoOpen: true,
+        height: "auto",
+        position: {
+            my: "center top",
+            at: "center top+100",
+            of: window
+        },
+        buttons: [
+            {
+                id: "addAttributeRepositoryButton",
+                text: "Add Attribute Repository",
+                click: function () {
+                    const repositoryType = $("#attributeRepositoryType").val();
+                    if (!["STUB", "LDAP", "JDBC"].includes(repositoryType)) {
+                        return;
+                    }
+                    if (!form[0].reportValidity()) {
+                        return;
+                    }
+                    if (repositoryType === "JDBC"
+                        && (!$("#attributeRepositoryJdbcDriverClass").val() || !$("#attributeRepositoryJdbcDialect").val())) {
+                        Swal.fire({
+                            title: "JDBC Configuration Required",
+                            text: "Select or enter both a JDBC driver class and dialect.",
+                            icon: "warning"
+                        });
+                        return;
+                    }
+                    const attributes = repositoryType === "LDAP"
+                        ? collectLdapAttributeRepositoryAttributes()
+                        : repositoryType === "JDBC"
+                            ? collectJdbcAttributeRepositoryAttributes()
+                            : collectStubAttributeRepositoryAttributes();
+                    if (Object.keys(attributes).length === 0) {
+                        Swal.fire({
+                            title: "Mapped Attributes Required",
+                            text: `Add at least one attribute and value for the ${repositoryType} repository.`,
+                            icon: "warning"
+                        });
+                        return;
+                    }
+
+                    const propertySources = PalantirDashboardConfiguration.mutablePropertySources();
+                    if (propertySources.length === 1) {
+                        submitAttributeRepository(repositoryType, propertySources[0]);
+                    } else {
+                        Swal.fire({
+                            title: "Which property source should receive the configuration?",
+                            input: "select",
+                            icon: "question",
+                            inputOptions: propertySources,
+                            inputPlaceholder: "Choose a property source...",
+                            showCancelButton: true
+                        }).then(result => {
+                            if (result.isConfirmed) {
+                                submitAttributeRepository(repositoryType, propertySources[Number(result.value)]);
+                            }
+                        });
+                    }
+                }
+            },
+            {
+                text: "Cancel",
+                click: function () {
+                    $(this).dialog("close");
+                }
+            }
+        ],
+        open: function () {
+            $(this).css("overflow", "visible");
+            $(this).closest(".ui-dialog").css("overflow", "visible");
+            cas.init("#newAttributeRepositoryDialog");
+            $("#attributeRepositoryType").selectmenu({
+                width: "330px",
+                change: (...args) => selectAttributeRepositoryType(args[1].item.value)
+            });
+            $("#attributeRepositoryJdbcCaseCanonicalization").selectmenu({width: "330px"});
+            selectAttributeRepositoryType($("#attributeRepositoryType").val());
+            $("#attributeRepositoryTypeSelectContainer").css({
+                "display": "flex",
+                "align-items": "center",
+                "white-space": "nowrap",
+                "gap": "8px"
+            });
+        },
+        close: function () {
+            $(this).dialog("destroy").remove();
+        }
+    });
+}
+
+function escapePersonDirectoryHtml(str) {
+    return String(str ?? "").replace(/[&<>"']/g, s => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[s]));
+}
+
+function formatAttributeRepositoryConfigValue(value) {
+    if (value === null || value === undefined || value === "") {
+        return "N/A";
+    }
+    if (Array.isArray(value)) {
+        return value.map(formatAttributeRepositoryConfigValue).join(", ");
+    }
+    if (typeof value === "object") {
+        return JSON.stringify(value);
+    }
+    return value;
+}
+
+function flattenAttributeRepositoryConfig(data) {
+    const result = {};
+
+    function recurse(cur, prop) {
+        if (Array.isArray(cur)) {
+            result[prop] = cur.map(formatAttributeRepositoryConfigValue).join(", ");
+        } else if (Object(cur) !== cur) {
+            result[prop] = cur;
+        } else {
+            let isEmpty = true;
+            for (const p in cur) {
+                isEmpty = false;
+                recurse(cur[p], prop ? `${prop}.${p}` : p);
+            }
+            if (isEmpty && prop) {
+                result[prop] = {};
+            }
+        }
+    }
+
+    recurse(data, "");
+    return result;
 }
 
 function attrDefTypeIcon(definition) {
@@ -234,26 +917,12 @@ function reloadAttributeDefinitionsTable() {
                 5: `<code>${definition.singleValue ? checked : unchecked}</code>`,
                 6: `<code>${definition.attribute ?? "N/A"}</code>`,
                 7: `<code>${definition.patternFormat ?? "N/A"}</code>`,
-                8: `<code>${definition.canonicalizationMode ?? "N/A"}</code>`,
-                9: `<code>${definition.flattened ? checked : unchecked}</code>`,
-                10: `<code>${definition?.friendlyName ?? "N/A"}</code>`,
-                11: `<code>${definition?.urn ?? "N/A"}</code>`,
-                12: `<button type="button" name="viewAttrDefn" href="#" data-key="${definition.key}"
-                            title="View Attribute Definition"
-                            class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                        <i class="mdi mdi-eye min-width-32x" aria-hidden="true"></i>
-                     </button>
-                     <button type="button" name="editAttrDefn" href="#" data-key="${definition.key}"
-                            title="Edit Attribute Definition"
-                            class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                        <i class="mdi mdi-pencil min-width-32x" aria-hidden="true"></i>
-                     </button>
-                     <button type="button" name="deleteAttrDefn" href="#" data-key="${definition.key}"
-                            title="Delete Attribute Definition"
-                            class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                        <i class="mdi mdi-delete min-width-32x" aria-hidden="true"></i>
-                     </button>`
-            });
+                    8: `<code>${definition.canonicalizationMode ?? "N/A"}</code>`,
+                    9: `<code>${definition.flattened ? checked : unchecked}</code>`,
+                    10: `<code>${definition?.friendlyName ?? "N/A"}</code>`,
+                    11: `<code>${definition?.urn ?? "N/A"}</code>`,
+                    key: definition.key
+                });
         }
         table.draw();
         if (response.length > 0) {
@@ -365,58 +1034,60 @@ function importAttributeDefinitions(fileInput) {
 }
 
 function bindAttrDefDeleteButtons() {
-    $("button[name=deleteAttrDefn]").off().on("click", function () {
-        const key = $(this).attr("data-key");
-        if (CasActuatorEndpoints.attributeDefinitions()) {
-            Swal.fire({
-                title: "Are you sure you want to delete this entry?",
-                text: "Once deleted, you may not be able to recover this entry.",
-                icon: "question",
-                showConfirmButton: true,
-                showDenyButton: true
-            })
-                .then((result) => {
-                    if (result.isConfirmed) {
-                        $.ajax({
-                            url: CasActuatorEndpoints.attributeDefinitions(),
-                            type: "DELETE",
-                            contentType: "application/json",
-                            data: JSON.stringify([key]),
-                            success: () => {
-                                reloadAttributeDefinitionsTable();
-                            },
-                            error: (xhr, status, error) => {
-                                console.error("Error deleting resource:", error);
-                                displayBanner(xhr);
-                            }
-                        });
-                    }
+    const table = $("#attributeDefinitionsTable").DataTable();
+    initializeDataTableContextMenu({
+        table: table,
+        selector: "#attributeDefinitionsTable tbody tr",
+        items: {
+            view: {name: "View Attribute Definition", icon: contextMenuIcon("mdi-eye")},
+            edit: {name: "Edit Attribute Definition", icon: contextMenuIcon("mdi-pencil")},
+            delete: {name: "Delete Attribute Definition", icon: contextMenuIcon("mdi-delete")}
+        },
+        callback: (key, context) => {
+            const definitionKey = context.rowData.key;
+            if (key === "delete" && CasActuatorEndpoints.attributeDefinitions()) {
+                Swal.fire({
+                    title: "Are you sure you want to delete this entry?",
+                    text: "Once deleted, you may not be able to recover this entry.",
+                    icon: "question",
+                    showConfirmButton: true,
+                    showDenyButton: true
+                })
+                    .then((result) => {
+                        if (result.isConfirmed) {
+                            $.ajax({
+                                url: CasActuatorEndpoints.attributeDefinitions(),
+                                type: "DELETE",
+                                contentType: "application/json",
+                                data: JSON.stringify([definitionKey]),
+                                success: () => {
+                                    reloadAttributeDefinitionsTable();
+                                },
+                                error: (xhr, status, error) => {
+                                    console.error("Error deleting resource:", error);
+                                    displayBanner(xhr);
+                                }
+                            });
+                        }
+                    });
+            } else if (key === "view" && CasActuatorEndpoints.attributeDefinitions()) {
+                $.get(`${CasActuatorEndpoints.attributeDefinitions()}/${definitionKey}`, response => {
+                    const editor = initializeAceEditor("viewAttrDefEditor", "json");
+                    editor.setReadOnly(true);
+                    editor.setValue(JSON.stringify(response, null, 2), -1);
+                    editor.gotoLine(1);
+                    const beautify = ace.require("ace/ext/beautify");
+                    beautify.beautify(editor.session);
+                    const dialog = window.mdc.dialog.MDCDialog.attachTo(document.getElementById("viewAttrDefDialog"));
+                    dialog["open"]();
+                }).fail((xhr, status, error) => {
+                    console.error("Error fetching data:", error);
+                    displayBanner(xhr);
                 });
+            } else if (key === "edit") {
+                editAttributeDefinition(definitionKey);
+            }
         }
-    });
-
-    $("button[name=viewAttrDefn]").off().on("click", function () {
-        const key = $(this).attr("data-key");
-        if (CasActuatorEndpoints.attributeDefinitions()) {
-            $.get(`${CasActuatorEndpoints.attributeDefinitions()}/${key}`, response => {
-                const editor = initializeAceEditor("viewAttrDefEditor", "json");
-                editor.setReadOnly(true);
-                editor.setValue(JSON.stringify(response, null, 2), -1);
-                editor.gotoLine(1);
-                const beautify = ace.require("ace/ext/beautify");
-                beautify.beautify(editor.session);
-                const dialog = window.mdc.dialog.MDCDialog.attachTo(document.getElementById("viewAttrDefDialog"));
-                dialog["open"]();
-            }).fail((xhr, status, error) => {
-                console.error("Error fetching data:", error);
-                displayBanner(xhr);
-            });
-        }
-    });
-
-    $("button[name=editAttrDefn]").off().on("click", function () {
-        const key = $(this).attr("data-key");
-        editAttributeDefinition(key);
     });
 }
 
@@ -638,15 +1309,21 @@ function openAttributeDefinitionDialog(existingDefinition) {
         paramName: "patternFormat"
     });
 
-    createInputField({
-        labelTitle: "Script",
-        name: "attributeDefinitionScript",
-        required: false,
-        containerId: controlsPanel,
-        title: "The script to run for the attribute value.",
-        cssClasses: "always-show",
-        paramName: "script"
-    });
+    if (PalantirDashboardConfiguration.scriptFactoryAvailable()) {
+        const scriptInput = createInputField({
+            labelTitle: "Script",
+            name: "attributeDefinitionScript",
+            required: false,
+            containerId: controlsPanel,
+            title: "The script to run for the attribute value.",
+            cssClasses: "always-show",
+            paramName: "script"
+        });
+        attachPalantirGroovyEditorButton({
+            target: scriptInput,
+            title: "Attribute Definition Groovy Script",
+        });
+    }
 
     createSelectField({
         containerId: controlsPanel,
@@ -745,6 +1422,7 @@ function openAttributeDefinitionDialog(existingDefinition) {
         valueField: "attrDefPatternValue",
         valueLabel: "Value / Script",
         cssClasses: "always-show",
+        groovyEditorTitle: "Attribute Definition Pattern Groovy Script",
         onChangeCallback: generateAttrDefPayload
     }).addClass("mb-3");
 

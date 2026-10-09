@@ -1,6 +1,7 @@
 package org.apereo.cas.gauth.web.flow;
 
 import module java.base;
+import org.apereo.cas.authentication.Authentication;
 import org.apereo.cas.authentication.OneTimeTokenAccount;
 import org.apereo.cas.gauth.credential.GoogleAuthenticatorTokenCredential;
 import org.apereo.cas.gauth.token.GoogleAuthenticatorToken;
@@ -14,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.BooleanUtils;
+import org.apache.commons.lang3.math.NumberUtils;
 import org.jspecify.annotations.Nullable;
 import org.springframework.webflow.execution.Event;
 import org.springframework.webflow.execution.RequestContext;
@@ -31,28 +33,36 @@ public class GoogleAuthenticatorConfirmAccountRegistrationAction extends BaseCas
      * Account property indicating account registration is now verified.
      */
     public static final String ACCOUNT_PROPERTY_REGISTRATION_VERIFIED = "registrationVerified";
-
     
     private final OneTimeTokenCredentialRepository repository;
+
     private final OneTimeTokenCredentialValidator<GoogleAuthenticatorTokenCredential, GoogleAuthenticatorToken> validator;
 
+    /**
+     * Verify or complete the registration of one of the authenticated user's devices. The account id is a
+     * request parameter, so the account is looked up among the authenticated principal's own devices;
+     * a request without an authentication, or for a device that belongs to another user, is refused.
+     *
+     * @param requestContext the request context
+     * @return the event
+     * @throws Throwable when the confirmation is not authorized
+     */
     @Override
     protected @Nullable Event doExecuteInternal(final RequestContext requestContext) throws Throwable {
         val requestParameters = requestContext.getRequestParameters();
-        val accountId = requestParameters.getRequired(OneTimeTokenAccountConfirmSelectionRegistrationAction.REQUEST_PARAMETER_ACCOUNT_ID, Long.class);
+        val accountId = NumberUtils.toLong(requestParameters.getRequired(OneTimeTokenAccountConfirmSelectionRegistrationAction.REQUEST_PARAMETER_ACCOUNT_ID));
         val validate = requestParameters.getBoolean(OneTimeTokenAccountSaveRegistrationAction.REQUEST_PARAMETER_VALIDATE);
-        val account = repository.get(accountId);
-        Objects.requireNonNull(account, "Account cannot be null");
+        val authentication = WebUtils.getAuthentication(requestContext);
+        val account = findAccount(authentication, accountId);
         if (BooleanUtils.isTrue(validate)) {
             val token = requestParameters.getRequired(GoogleAuthenticatorSaveRegistrationAction.REQUEST_PARAMETER_TOKEN, String.class);
-            val authentication = WebUtils.getAuthentication(requestContext);
             val principal = authentication.getPrincipal().getId();
             LOGGER.debug("Validating account [{}] with token [{}] for principal [{}]", accountId, token, principal);
             val tokenCredential = new GoogleAuthenticatorTokenCredential(token, accountId);
             val validatedToken = validator.validate(authentication, tokenCredential);
             if (validatedToken != null) {
                 LOGGER.debug("Validated OTP token [{}] successfully for [{}]", validatedToken, principal);
-                accountRegistrationVerified(requestContext, account);
+                accountRegistrationVerified(requestContext, findAccount(authentication, accountId));
                 return success();
             }
             LOGGER.warn("Authorization of OTP token [{}] has failed", token);
@@ -68,17 +78,34 @@ public class GoogleAuthenticatorConfirmAccountRegistrationAction extends BaseCas
         return success();
     }
 
+    /**
+     * Find the device among the authenticated user's own devices. An identifier that is not a number
+     * arrives here as zero, which no device carries, so it is refused like any device the user does not own.
+     * The device is looked up again once the token is validated, since validation may have changed it
+     * (a used scratch code, the last-used time), and the verification flag must not undo those changes.
+     *
+     * @param authentication the authentication, if any
+     * @param accountId      the account id
+     * @return the account
+     * @throws FailedLoginException when the user has no such device
+     */
+    private OneTimeTokenAccount findAccount(@Nullable final Authentication authentication, final long accountId) throws FailedLoginException {
+        return Optional.ofNullable(authentication)
+            .map(auth -> repository.get(auth.getPrincipal().getId(), accountId))
+            .orElseThrow(() -> new FailedLoginException("Unauthorized account registration attempt for id " + accountId));
+    }
+
     protected void accountRegistrationVerified(final RequestContext requestContext, final OneTimeTokenAccount account) {
-        account.getProperties().add(ACCOUNT_PROPERTY_REGISTRATION_VERIFIED);
+        GoogleAuthenticatorAccountVerificationUtils.markVerified(account, ACCOUNT_PROPERTY_REGISTRATION_VERIFIED);
         repository.update(account);
     }
 
     protected void accountRegistrationUnverified(final RequestContext requestContext, final OneTimeTokenAccount account) {
-        account.getProperties().remove(ACCOUNT_PROPERTY_REGISTRATION_VERIFIED);
+        GoogleAuthenticatorAccountVerificationUtils.clearVerification(account, ACCOUNT_PROPERTY_REGISTRATION_VERIFIED);
         repository.update(account);
     }
 
     protected boolean isAccountRegistrationVerified(final RequestContext requestContext, final OneTimeTokenAccount account) {
-        return account.getProperties().contains(ACCOUNT_PROPERTY_REGISTRATION_VERIFIED);
+        return GoogleAuthenticatorAccountVerificationUtils.isVerified(account, ACCOUNT_PROPERTY_REGISTRATION_VERIFIED);
     }
 }

@@ -8,9 +8,11 @@ import org.apereo.cas.util.spring.beans.BeanSupplier;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.google.common.base.Suppliers;
 import lombok.Builder;
 import lombok.Getter;
-import lombok.experimental.SuperBuilder;
+import lombok.SuperBuilder;
+import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -58,7 +60,23 @@ import tools.jackson.dataformat.yaml.YAMLMapper;
  */
 @SuperBuilder
 @Getter
+@Slf4j
 public class JacksonObjectMapperFactory {
+    /**
+     * Providers discovered through the JDK service loader are fixed for the lifetime of the JVM,
+     * yet CAS builds object mappers from hundreds of call sites, many of them static fields that are
+     * initialized while the application context is still starting up. Re-scanning the classpath for
+     * every mapper is pure overhead, so the discovery results are resolved once and reused.
+     */
+    private static final Supplier<List<JacksonObjectMapperCustomizer>> SERVICE_LOADED_CUSTOMIZERS =
+        Suppliers.memoize(() -> ServiceLoader.load(JacksonObjectMapperCustomizer.class)
+            .stream()
+            .map(ServiceLoader.Provider::get)
+            .filter(Objects::nonNull)
+            .toList());
+
+    private static final Supplier<List<JacksonModule>> DISCOVERED_MODULES = Suppliers.memoize(MapperBuilder::findModules);
+
     private final boolean defaultTypingEnabled;
 
     private final boolean failOnUnknownProperties;
@@ -160,16 +178,19 @@ public class JacksonObjectMapperFactory {
     }
 
     private List<JacksonObjectMapperCustomizer> getObjectMapperCustomizers() {
-        val customizers = ServiceLoader.load(JacksonObjectMapperCustomizer.class)
+        val customizers = SERVICE_LOADED_CUSTOMIZERS.get()
             .stream()
-            .map(ServiceLoader.Provider::get)
             .filter(BeanSupplier::isNotProxy)
             .collect(Collectors.toList());
 
         val effectiveContext = ObjectUtils.getIfNull(applicationContext, ApplicationContextProvider.getApplicationContext());
-        if (effectiveContext != null) {
-            val customizerBeans = effectiveContext.getBeansOfType(JacksonObjectMapperCustomizer.class).values();
-            customizers.addAll(customizerBeans);
+        if (effectiveContext != null
+            && !(effectiveContext instanceof final ConfigurableApplicationContext context && !context.isActive())) {
+            try {
+                customizers.addAll(effectiveContext.getBeansOfType(JacksonObjectMapperCustomizer.class).values());
+            } catch (final IllegalStateException e) {
+                LOGGER.debug("Application context cannot supply object mapper customizers yet: [{}]", e.getMessage());
+            }
         }
         AnnotationAwareOrderComparator.sort(customizers);
         return customizers;
@@ -207,7 +228,7 @@ public class JacksonObjectMapperFactory {
             .changeDefaultVisibility(handler -> handler.withSetterVisibility(JsonAutoDetect.Visibility.PROTECTED_AND_PUBLIC)
                 .withGetterVisibility(JsonAutoDetect.Visibility.PROTECTED_AND_PUBLIC)
                 .withIsGetterVisibility(JsonAutoDetect.Visibility.PROTECTED_AND_PUBLIC))
-            .findAndAddModules()
+            .addModules(DISCOVERED_MODULES.get())
             .addModules(this.modules)
             .addModule(new JacksonComponentModule())
             .addModule(new JacksonMixinModule())
@@ -240,26 +261,16 @@ public class JacksonObjectMapperFactory {
     }
 
     private MapperBuilder determineMapperInstance() {
-        switch (jsonFactory) {
-            case final YAMLFactory factory -> {
-                return YAMLMapper.builder(factory);
-            }
-            case final XmlFactory factory -> {
-                return XmlMapper.builder(factory);
-            }
-            case final CBORFactory factory -> {
-                return CBORMapper.builder(factory);
-            }
-            case final SmileFactory factory -> {
-                return SmileMapper.builder(factory);
-            }
-            case final JsonFactory factory -> {
-                return JsonMapper.builder(factory)
-                    .configure(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS, isQuoteFieldNames())
-                    .configure(JsonWriteFeature.QUOTE_PROPERTY_NAMES, isQuoteFieldNames());
-            }
+        return switch (jsonFactory) {
+            case final YAMLFactory factory -> YAMLMapper.builder(factory);
+            case final XmlFactory factory -> XmlMapper.builder(factory);
+            case final CBORFactory factory -> CBORMapper.builder(factory);
+            case final SmileFactory factory -> SmileMapper.builder(factory);
+            case final JsonFactory factory -> JsonMapper.builder(factory)
+                .configure(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS, isQuoteFieldNames())
+                .configure(JsonWriteFeature.QUOTE_PROPERTY_NAMES, isQuoteFieldNames());
             default -> throw new IllegalStateException("Unexpected value: " + jsonFactory);
-        }
+        };
     }
 
     private static JacksonModule getCasJacksonModule() {

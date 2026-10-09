@@ -6,8 +6,10 @@ import org.apereo.cas.otp.repository.credentials.OneTimeTokenCredentialRepositor
 import org.apereo.cas.test.CasTestExtension;
 import org.apereo.cas.util.junit.EnabledIfListeningOnPort;
 import lombok.Getter;
+import lombok.val;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -15,6 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * This is {@link MongoDbGoogleAuthenticatorTokenCredentialRepositoryTests}.
@@ -34,6 +37,7 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
         "cas.authn.mfa.gauth.mongo.password=secret",
         "cas.authn.mfa.gauth.mongo.authentication-database-name=admin",
         "cas.authn.mfa.gauth.mongo.database-name=gauth-token-credential",
+        "cas.authn.mfa.gauth.core.scratch-codes.encryption.key=12345678901234567890123456789012",
         "cas.authn.mfa.gauth.crypto.enabled=false"
     })
 @EnableTransactionManagement(proxyTargetClass = false)
@@ -51,5 +55,13 @@ class MongoDbGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTi
     @BeforeEach
     void cleanUp() {
         registry.deleteAll();
+    }
+
+    @Test
+    void verifyUsernamesDifferingByAccentAreDistinct() {
+        val suffix = UUID.randomUUID().toString();
+        registry.save(registry.create("jose" + suffix));
+        assertEquals(1, registry.count("JOSE" + suffix));
+        assertEquals(0, registry.count("jos\u00e9" + suffix));
     }
 }

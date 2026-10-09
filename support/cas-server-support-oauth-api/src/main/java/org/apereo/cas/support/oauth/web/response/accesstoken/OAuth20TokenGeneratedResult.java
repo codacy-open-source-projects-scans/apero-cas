@@ -7,8 +7,8 @@ import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.ticket.Ticket;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.SuperBuilder;
 import lombok.ToString;
-import lombok.experimental.SuperBuilder;
 
 /**
  * This is {@link OAuth20TokenGeneratedResult}.
@@ -36,6 +36,8 @@ public class OAuth20TokenGeneratedResult implements Serializable {
 
     private final String userCode;
 
+    private final Ticket token;
+    
     @Builder.Default
     @Getter
     private final Map<String, Object> details = new LinkedHashMap<>();
@@ -66,5 +68,9 @@ public class OAuth20TokenGeneratedResult implements Serializable {
 
     public Optional<String> getUserCode() {
         return Optional.ofNullable(userCode);
+    }
+
+    public Optional<Ticket> getToken() {
+        return Optional.ofNullable(token);
     }
 }

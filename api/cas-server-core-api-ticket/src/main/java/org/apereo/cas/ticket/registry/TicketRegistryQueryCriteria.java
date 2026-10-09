@@ -5,10 +5,10 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.SuperBuilder;
 import lombok.ToString;
 import lombok.With;
 import lombok.experimental.Accessors;
-import lombok.experimental.SuperBuilder;
 
 /**
  * This is {@link TicketRegistryQueryCriteria}.
@@ -29,7 +29,7 @@ public class TicketRegistryQueryCriteria implements Serializable {
     private static final long serialVersionUID = 3295014227993873566L;
 
     private String type;
-    
+
     private String id;
 
     private String principal;

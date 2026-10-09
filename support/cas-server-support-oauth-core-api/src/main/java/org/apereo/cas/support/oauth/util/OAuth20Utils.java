@@ -15,9 +15,14 @@ import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.web.response.accesstoken.OAuth20TokenGeneratedResult;
 import org.apereo.cas.ticket.OAuth20Token;
+import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
+import org.apereo.cas.ticket.code.OAuth20Code;
+import org.apereo.cas.ticket.refreshtoken.OAuth20RefreshToken;
 import org.apereo.cas.token.JwtBuilder;
 import org.apereo.cas.util.CollectionUtils;
+import org.apereo.cas.util.DigestUtils;
+import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.serialization.JacksonObjectMapperFactory;
 import org.apereo.cas.web.flow.CasWebflowConstants;
@@ -37,8 +42,10 @@ import org.pac4j.core.profile.UserProfile;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.servlet.view.json.JacksonJsonView;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 import jakarta.servlet.http.HttpServletResponse;
+import java.security.cert.X509Certificate;
 
 /**
  * This class has some useful methods to output data in plain text,
@@ -52,6 +59,9 @@ import jakarta.servlet.http.HttpServletResponse;
 public class OAuth20Utils {
     private static final JsonMapper MAPPER = JacksonObjectMapperFactory.builder()
         .singleArrayElementUnwrapped(true).build().toJsonMapper();
+
+    private static final JsonMapper UNTYPED_MAPPER = JacksonObjectMapperFactory.builder()
+        .defaultTypingEnabled(false).build().toJsonMapper();
 
     /**
      * Write to the output this error.
@@ -73,7 +83,8 @@ public class OAuth20Utils {
      * @return the model and view
      */
     public static ModelAndView writeError(final HttpServletResponse response,
-                                          final String error, final String description) {
+                                          final String error,
+                                          @Nullable final String description) {
         val model = getErrorResponseBody(error, description);
         val mv = new ModelAndView(new JacksonJsonView(MAPPER), model);
         mv.setStatus(HttpStatus.BAD_REQUEST);
@@ -88,7 +99,7 @@ public class OAuth20Utils {
      * @param description the description
      * @return the error response body
      */
-    public static Map<String, Object> getErrorResponseBody(final String error, final String description) {
+    public static Map<String, Object> getErrorResponseBody(final String error, @Nullable final String description) {
         val model = CollectionUtils.<String, Object>wrap(OAuth20Constants.ERROR, error);
         if (StringUtils.isNotBlank(description)) {
             model.put(OAuth20Constants.ERROR_DESCRIPTION, description);
@@ -105,15 +116,13 @@ public class OAuth20Utils {
      * @param clazz           the clazz
      * @return the registered o auth service by client id
      */
-    public static <T extends OAuthRegisteredService> @Nullable T getRegisteredOAuthServiceByClientId(final ServicesManager servicesManager,
-                                                                                                     final String clientId,
-                                                                                                     final Class<T> clazz) {
+    public static <T extends OAuthRegisteredService> @Nullable T getRegisteredOAuthServiceByClientId(
+        final ServicesManager servicesManager, final String clientId, final Class<T> clazz) {
         return FunctionUtils.doIfNotBlank(clientId,
             () -> {
                 val query = RegisteredServiceQuery.of(OAuthRegisteredService.class, "clientId", clientId).withIncludeAssignableTypes(true);
                 return servicesManager.findServicesBy(query).findFirst().map(clazz::cast).orElse(null);
-            },
-            () -> null);
+            });
     }
 
     /**
@@ -137,10 +146,9 @@ public class OAuth20Utils {
      */
     public static @Nullable OAuthRegisteredService getRegisteredOAuthServiceByRedirectUri(final ServicesManager servicesManager,
                                                                                           final String redirectUri) {
-        validateRedirectUri(redirectUri);
-        return FunctionUtils.doIfNotBlank(redirectUri,
-            () -> getRegisteredOAuthServiceByPredicate(servicesManager, service -> service.matches(redirectUri)),
-            () -> null);
+        return validateRedirectUri(redirectUri, false)
+            ? getRegisteredOAuthServiceByPredicate(servicesManager, service -> service.matches(redirectUri))
+            : null;
     }
 
     private static @Nullable OAuthRegisteredService getRegisteredOAuthServiceByPredicate(final ServicesManager servicesManager,
@@ -240,7 +248,7 @@ public class OAuth20Utils {
     }
 
     /**
-     * Is response mode type expected?
+     * Determines whether the response mode type matches the expected type.
      *
      * @param type         the type
      * @param expectedType the expected type
@@ -271,9 +279,11 @@ public class OAuth20Utils {
      */
     public static boolean checkCallbackValid(final @NonNull RegisteredService registeredService,
                                              final String redirectUri) {
-        val matchingStrategy = Optional.of(registeredService).map(RegisteredService::getMatchingStrategy).orElse(null);
-        validateRedirectUri(redirectUri);
-        if (matchingStrategy == null || !matchingStrategy.matches(registeredService, redirectUri)) {
+        val validRedirectUri = validateRedirectUri(redirectUri, false);
+        val matchingStrategy = Optional.of(registeredService)
+            .map(RegisteredService::getMatchingStrategy)
+            .orElse(null);
+        if (!validRedirectUri || matchingStrategy == null || !matchingStrategy.matches(registeredService, redirectUri)) {
             LOGGER.warn("Unsupported [{}]: [{}] does not match what is defined for registered service: [{}]. "
                     + "Service is considered unauthorized. Verify the service matching strategy used in the service "
                     + "definition is correct and does in fact match the client [{}]",
@@ -306,7 +316,7 @@ public class OAuth20Utils {
      * @param profile the profile
      * @return the client id from authenticated profile
      */
-    public static String getClientIdFromAuthenticatedProfile(final UserProfile profile) {
+    public static @Nullable String getClientIdFromAuthenticatedProfile(final UserProfile profile) {
         val attrs = new HashMap<>(profile.getAttributes());
         if (attrs.containsKey(OAuth20Constants.CLIENT_ID)) {
             val attribute = attrs.get(OAuth20Constants.CLIENT_ID);
@@ -340,13 +350,15 @@ public class OAuth20Utils {
     }
 
     /**
-     * Is the registered service need authentication?
+     * Determines whether the registered service requires authentication.
      *
      * @param registeredService the registered service
      * @return whether the service need authentication
      */
     public boolean doesServiceNeedAuthentication(final OAuthRegisteredService registeredService) {
-        return StringUtils.isNotBlank(registeredService.getClientSecret());
+        return registeredService.getClientSecrets() != null
+            && !registeredService.getClientSecrets().isEmpty()
+            && registeredService.getClientSecrets().stream().anyMatch(secret -> StringUtils.isNotBlank(secret.getValue()));
     }
 
     /**
@@ -354,11 +366,18 @@ public class OAuth20Utils {
      *
      * @param redirectUri the redirect uri
      */
-    public void validateRedirectUri(final String redirectUri) {
-        if (StringUtils.isNotBlank(redirectUri)) {
+    public boolean validateRedirectUri(final String redirectUri, final boolean throwOnFailure) {
+        return StringUtils.isNotBlank(redirectUri) && FunctionUtils.doAndHandle(() -> {
             RedirectURIValidator.ensureLegal(URI.create(redirectUri));
-        }
+            return true;
+        }, e -> {
+            if (throwOnFailure) {
+                throw e;
+            }
+            return false;
+        }).get();
     }
+
 
     /**
      * Is access token request?.
@@ -447,5 +466,57 @@ public class OAuth20Utils {
         }
         val header = JwtBuilder.parseHeader(token);
         return (String) header.getCustomParam(OAuth20Constants.CLIENT_ID);
+    }
+
+    /**
+     * Compute the certificate thumbprint for certificate-bound tokens per RFC 8705,
+     * which is the base64url-encoded SHA-256 hash of the DER-encoded certificate.
+     *
+     * @param certificate the certificate
+     * @return the thumbprint
+     */
+    public static String computeCertificateThumbprint(final X509Certificate certificate) {
+        return FunctionUtils.doUnchecked(() -> EncodingUtils.encodeUrlSafeBase64(DigestUtils.rawDigest("SHA-256", certificate.getEncoded())));
+    }
+
+    /**
+     * Authorization details a token was granted with, per RFC 9396: those an authorization code carries, or a
+     * refresh token carries from the code it was issued for. Other tokens contribute none.
+     *
+     * @param token the token being exchanged, if any
+     * @return the authorization details, never null
+     */
+    public static List<? extends Serializable> getAuthorizationDetails(@Nullable final Ticket token) {
+        final List<? extends Serializable> authorizationDetails = switch (token) {
+            case final OAuth20Code code -> code.getAuthorizationDetails();
+            case final OAuth20RefreshToken refreshToken -> refreshToken.getAuthorizationDetails();
+            case null, default -> null;
+        };
+        return authorizationDetails == null ? new ArrayList<>() : authorizationDetails;
+    }
+
+    /**
+     * Authorization details as untyped JSON for a compact ticket, or an empty string when there are none.
+     *
+     * @param authorizationDetails the authorization details
+     * @return the compact value
+     */
+    public static String toCompactAuthorizationDetails(@Nullable final List<? extends Serializable> authorizationDetails) {
+        return authorizationDetails == null || authorizationDetails.isEmpty()
+            ? StringUtils.EMPTY
+            : UNTYPED_MAPPER.writeValueAsString(authorizationDetails);
+    }
+
+    /**
+     * Authorization details read back from a compact ticket, each as a map of its JSON members.
+     *
+     * @param value the compact value
+     * @return the authorization details, never null
+     */
+    public static List<? extends Serializable> fromCompactAuthorizationDetails(@Nullable final String value) {
+        return StringUtils.isBlank(value)
+            ? new ArrayList<>()
+            : UNTYPED_MAPPER.readValue(value, new TypeReference<ArrayList<LinkedHashMap<String, Object>>>() {
+            });
     }
 }

@@ -1,10 +1,14 @@
 package org.apereo.cas.oidc.vc.offer;
 
 import module java.base;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.SuperBuilder;
+import lombok.ToString;
 
 /**
  * This is {@link OidcVerifiableCredentialOffer}.
@@ -12,12 +16,19 @@ import lombok.Setter;
  * @author Misagh Moayyed
  * @since 8.0.0
  */
-@JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonInclude(JsonInclude.Include.NON_EMPTY)
 @Getter
 @Setter
 public class OidcVerifiableCredentialOffer implements Serializable {
     @Serial
     private static final long serialVersionUID = -700734371623770443L;
+
+    /**
+     * Identifier of the issuance transaction backing this offer. It addresses the
+     * offer document itself and is never a substitute for the transaction code.
+     */
+    @JsonIgnore
+    private String transactionId;
 
     /**
      * The credential issuer identifier.
@@ -37,9 +48,10 @@ public class OidcVerifiableCredentialOffer implements Serializable {
     @JsonProperty("grants")
     private Grants grants = new Grants();
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     @Getter
     @Setter
+    @ToString
     public static class Grants implements Serializable {
         @Serial
         private static final long serialVersionUID = -4893372167485529534L;
@@ -47,9 +59,10 @@ public class OidcVerifiableCredentialOffer implements Serializable {
         @JsonProperty("urn:ietf:params:oauth:grant-type:pre-authorized_code")
         private PreAuthorizedCodeGrant preAuthorizedCodeGrant;
 
-        @JsonInclude(JsonInclude.Include.NON_NULL)
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
         @Getter
         @Setter
+        @ToString
         public static class PreAuthorizedCodeGrant implements Serializable {
             @Serial
             private static final long serialVersionUID = -5053076827220322623L;
@@ -58,24 +71,40 @@ public class OidcVerifiableCredentialOffer implements Serializable {
             private String preAuthorizedCode;
 
             /**
-             * Whether a transaction code is required in the token request.
-             */
-            @JsonProperty("tx_code_required")
-            private boolean txCodeRequired = true;
-
-            /**
              * Optional transaction code associated with the issuance transaction.
              * The transaction code is a code that the wallet must present during
-             * the pre-authorized code token exchange if tx_code_required is true.
+             * the pre-authorized code token exchange.
              */
             @JsonProperty("tx_code")
-            private String txCode;
+            private TransactionCode transactionCode;
 
             /**
              * Optional issuer state associated with the issuance transaction.
              */
             @JsonProperty("issuer_state")
             private String issuerState;
+        }
+
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @SuperBuilder
+        @ToString
+        public static class TransactionCode implements Serializable {
+            @Serial
+            private static final long serialVersionUID = -5053076827220322623L;
+
+            @JsonProperty("input_mode")
+            @Builder.Default
+            private String inputMode = "text";
+
+            @JsonIgnore
+            private String value;
+
+            private int length;
+
+            @Builder.Default
+            private String description = "Enter the transaction code.";
         }
     }
 }

@@ -4,11 +4,11 @@ async function initializeServicesOperations() {
         {visible: true, targets: 1},
         {visible: true, targets: 2},
         {visible: true, targets: 3},
-        {visible: true, targets: 4},
-        {visible: false, targets: 5}
+        {visible: false, targets: 4}
     ];
 
     const applicationsTable = $("#applicationsTable").DataTable({
+        deferRender: true,
         pageLength: 25,
         autoWidth: false,
         columnDefs: columnDefinitions,
@@ -52,9 +52,9 @@ async function initializeServicesOperations() {
     await initializeFooterButtons();
 
     let serviceDefinitionsEntries = "";
-    for (let type in serviceDefinitions) {
+    for (let type in PalantirDashboardConfiguration.serviceDefinitions()) {
         serviceDefinitionsEntries += `<h3>${type} Templates</h3>`;
-        const entries = serviceDefinitions[type];
+        const entries = PalantirDashboardConfiguration.serviceDefinitions()[type];
         serviceDefinitionsEntries += "<div>";
         for (const entry of entries) {
             const definition = JSON.parse(entry);
@@ -74,7 +74,7 @@ async function initializeServicesOperations() {
         let type = $(this).data("type");
         let id = $(this).data("id");
 
-        const entries = serviceDefinitions[type];
+        const entries = PalantirDashboardConfiguration.serviceDefinitions()[type];
         for (const entry of entries) {
             const definition = JSON.parse(entry);
             if (definition.id === id) {
@@ -93,61 +93,156 @@ async function initializeServicesOperations() {
     }
 }
 
-// Module-level variables for edit service functionality
-let currentEditServiceData = null;
 let serviceEditorInstance = null;
 let editServiceDialogInstance = null;
+let entityHistoryDialogInstance = null;
+
+/**
+ * Sizes the plain editor dialog to the window, leaving a small margin.
+ *
+ * Matches the wizard beside it: the editor is a working surface rather than a message, so it takes
+ * the whole window, and Ace is told to re-measure afterwards since it cannot detect a container
+ * resize on its own.
+ */
+function sizeServiceEditorDialog() {
+    const element = $("#editServiceDialog");
+    if (!element.hasClass("ui-dialog-content") || !element.dialog("isOpen")) {
+        return;
+    }
+    const margin = 24;
+    element.dialog("option", {
+        width: Math.max(320, $(window).width() - margin * 2),
+        height: Math.max(320, $(window).height() - margin * 2)
+    });
+    element.dialog("option", "position", {my: "center", at: "center", of: window});
+    serviceEditorInstance?.resize(true);
+}
+
+/**
+ * The plain service-definition editor, as a jQuery UI dialog.
+ *
+ * A jQuery UI dialog like the wizard and every other dialog in Palantir: the widget supplies the
+ * focus trap, Escape handling, a title bar and role=dialog, which the hand-written MDC markup did
+ * not. The returned handle exposes open and close so the shared save handler can drive this dialog
+ * and the wizard's through the same two calls.
+ *
+ * @returns {{open: function, close: function}} a handle onto the dialog
+ */
+function getEditServiceDialogInstance() {
+    if (!editServiceDialogInstance) {
+        const element = $("#editServiceDialog");
+        if (!element.hasClass("ui-dialog-content")) {
+            element.removeClass("hide").dialog({
+                autoOpen: false,
+                modal: true,
+                closeOnEscape: true,
+                draggable: false,
+                resizable: false,
+                dialogClass: "registered-service-wizard-dialog",
+                close: () => $(window).off("resize.serviceEditor")
+            });
+        }
+        editServiceDialogInstance = {
+            open: () => {
+                element.dialog("open");
+                sizeServiceEditorDialog();
+                $(window)
+                    .off("resize.serviceEditor")
+                    .on("resize.serviceEditor", sizeServiceEditorDialog);
+            },
+            close: () => element.dialog("close")
+        };
+    }
+    return editServiceDialogInstance;
+}
+
+function getEntityHistoryDialogInstance() {
+    if (!entityHistoryDialogInstance) {
+        entityHistoryDialogInstance = window.mdc.dialog.MDCDialog.attachTo(document.getElementById("viewEntityHistoryDialog"));
+    }
+    return entityHistoryDialogInstance;
+}
 
 async function initializeServiceButtons() {
+    getEditServiceDialogInstance();
     serviceEditorInstance = initializeAceEditor("serviceEditor");
-    editServiceDialogInstance = window.mdc.dialog.MDCDialog.attachTo(document.getElementById("editServiceDialog"));
 
-    if (CasActuatorEndpoints.registeredServices()) {
+    function viewEntityHistory(serviceId) {
         const entityHistoryTable = $("#entityHistoryTable").DataTable();
-        $("button[name=viewEntityHistory]").off().on("click", function () {
-            let serviceId = $(this).parent().attr("serviceId");
-            $.get(`${CasActuatorEndpoints.entityHistory()}/registeredServices/${serviceId}`, response => {
-                entityHistoryTable.clear();
+        $.get(`${CasActuatorEndpoints.entityHistory()}/registeredServices/${serviceId}`, response => {
+            entityHistoryTable.clear();
 
-                const editor = initializeAceEditor("entityHistoryEditor", "json");
-                editor.setValue("");
-                editor.setReadOnly(true);
+            const editor = initializeAceEditor("entityHistoryEditor", "json");
+            editor.setValue("");
+            editor.setReadOnly(true);
 
-                for (const item of response) {
-                    entityHistoryTable.row.add({
-                        0: `<code>${item.id}</code>`,
-                        1: `<code>${item.date}</code>`,
-                        2: `${JSON.stringify(item.entity, null, 4)}`
-                    });
-                }
-
-                entityHistoryTable.draw();
-                entityHistoryTable.on("click", "tbody tr", function () {
-                    let data = entityHistoryTable.row(this).data();
-                    editor.setValue(data[2]);
-                    editor.gotoLine(1);
-                    editor.setReadOnly(true);
+            for (const item of response) {
+                entityHistoryTable.row.add({
+                    0: `<code>${item.id}</code>`,
+                    1: `<code>${item.date}</code>`,
+                    2: `${JSON.stringify(item.entity, null, 4)}`,
+                    serviceId: serviceId,
+                    revisionId: item.id
                 });
+            }
 
-                if (response.length > 0) {
-                    const dialog = window.mdc.dialog.MDCDialog.attachTo(document.getElementById("viewEntityHistoryDialog"));
-                    dialog["open"]();
-                } else {
-                    Swal.fire("No History!", "There are no changes recorded for this application definition.", "info");
-                }
-
-            }).fail((xhr, status, error) => {
-                console.error("Error fetching data:", error);
-                displayBanner(xhr);
+            entityHistoryTable.draw();
+            entityHistoryTable.off("click", "tbody tr").on("click", "tbody tr", function () {
+                let data = entityHistoryTable.row(this).data();
+                editor.setValue(data[2]);
+                editor.gotoLine(1);
+                editor.setReadOnly(true);
             });
 
-        });
+            if (response.length > 0) {
+                getEntityHistoryDialogInstance()["open"]();
+            } else {
+                Swal.fire("No History!", "There are no changes recorded for this application definition.", "info");
+            }
 
+        }).fail((xhr, status, error) => {
+            console.error("Error fetching data:", error);
+            displayBanner(xhr);
+        });
     }
 
-    $("button[name=viewEntityChangelog]").off().on("click", function () {
-        let serviceId = $(this).parent().attr("serviceId");
+    initializeDataTableContextMenu({
+        table: $("#entityHistoryTable").DataTable(),
+        selector: "#entityHistoryTable tbody tr",
+        items: {
+            restore: {name: "Restore Version", icon: contextMenuIcon("mdi-history")}
+        },
+        callback: (key, context) => {
+            if (key === "restore") {
+                const {serviceId, revisionId} = context.rowData;
+                Swal.fire({
+                    title: "Restore this version?",
+                    text: `Version ${revisionId} will replace the current definition of service ${serviceId}.`,
+                    icon: "question",
+                    showCancelButton: true,
+                    confirmButtonText: "Restore",
+                    showLoaderOnConfirm: true,
+                    allowOutsideClick: () => !Swal.isLoading(),
+                    preConfirm: () => $.ajax({
+                        url: `${CasActuatorEndpoints.entityHistory()}/registeredServices/${encodeURIComponent(serviceId)}/restore/${encodeURIComponent(revisionId)}`,
+                        type: "POST",
+                        headers: {"Accept": "application/json"}
+                    }).catch(xhr => {
+                        console.error("Error restoring service:", xhr);
+                        Swal.showValidationMessage("Unable to restore this version. Please try again or check your access to service history.");
+                    })
+                }).then(result => {
+                    if (result.isConfirmed) {
+                        getEntityHistoryDialogInstance()["close"]();
+                        fetchServices(() => updateNavigationSidebar());
+                        Swal.fire("Service Restored", `Version ${revisionId} is now the current definition of service ${serviceId}.`, "success");
+                    }
+                });
+            }
+        }
+    });
 
+    function viewEntityChangelog(serviceId) {
         $.get(`${CasActuatorEndpoints.entityHistory()}/registeredServices/${serviceId}/changelog`, response => {
             const editor = initializeAceEditor("entityChangelogEditor", "text");
             editor.setValue(response);
@@ -159,10 +254,10 @@ async function initializeServiceButtons() {
             console.error("Error fetching data:", error);
             displayBanner(xhr);
         });
-    });
+    }
 
-    $("button[name=deleteService]").off().on("click", function () {
-        let serviceId = $(this).parent().attr("serviceId");
+    function deleteService(context) {
+        const serviceId = context.rowData.serviceId;
         if (CasActuatorEndpoints.registeredServices()) {
             Swal.fire({
                 title: "Are you sure you want to delete this entry?",
@@ -178,9 +273,8 @@ async function initializeServiceButtons() {
                             type: "DELETE",
                             headers: {"Content-Type": "application/json"},
                             success: response => {
-                                let nearestTr = $(this).closest("tr");
                                 let applicationsTable = $("#applicationsTable").DataTable();
-                                applicationsTable.row(nearestTr).remove().draw();
+                                applicationsTable.row(context.$row).remove().draw();
                             },
                             error: (xhr, status, error) => {
                                 console.error("Error deleting resource:", error);
@@ -190,105 +284,33 @@ async function initializeServiceButtons() {
                     }
                 });
         }
-    });
-
-    // Close edit menu when clicking outside
-    $(document).off("click.editMenu").on("click.editMenu", function(e) {
-        const $menu = $("#editServiceMenuContainer");
-        if ($menu.is(":visible") && !$(e.target).closest("#editServiceMenuContainer").length &&
-            !$(e.target).closest("button[name=editService]").length) {
-            $menu.hide();
-            currentEditServiceData = null;
-        }
-    });
-
-    // Move the edit menu to body for proper positioning (do this once)
-    const $editMenu = $("#editServiceMenuContainer");
-    if ($editMenu.parent()[0] !== document.body) {
-        $editMenu.appendTo("body");
     }
 
-    $("button[name=editService]").off().on("click", function (e) {
-        let serviceId = $(this).parent().attr("serviceId");
-        const $button = $(this);
-
+    function editService(serviceId, wizard) {
         if (CasActuatorEndpoints.registeredServices()) {
             $.get(`${CasActuatorEndpoints.registeredServices()}/${serviceId}`, response => {
-                currentEditServiceData = response;
-
-                const $menu = $("#editServiceMenuContainer");
-
-                // Use offset() for document-relative positioning with position:absolute
-                const buttonOffset = $button.offset();
-                const buttonHeight = $button.outerHeight();
-                const buttonWidth = $button.outerWidth();
-
-                // Show menu temporarily to get its dimensions
-                $menu.css({display: "block", visibility: "hidden"});
-                const menuHeight = $menu.outerHeight();
-                const menuWidth = $menu.outerWidth();
-                $menu.css({visibility: "visible"});
-
-                // Calculate position - place below and to the left of button
-                let menuTop = buttonOffset.top + buttonHeight + 5;
-                let menuLeft = buttonOffset.left - menuWidth + buttonWidth;
-
-                // Ensure menu doesn't go off-screen horizontally
-                if (menuLeft < 10) {
-                    menuLeft = 10;
+                if (wizard) {
+                    openRegisteredServiceWizardDialog(response);
+                    return;
                 }
-                if (menuLeft + menuWidth > $(document).width()) {
-                    menuLeft = $(document).width() - menuWidth - 10;
-                }
-
-                // Ensure menu doesn't go below the document
-                // Note: with position:absolute, we use document coordinates, not viewport
-                if (menuTop + menuHeight > $(document).height()) {
-                    // Show above the button instead
-                    menuTop = buttonOffset.top - menuHeight - 5;
-                }
-                if (menuTop < 0) {
-                    menuTop = 10;
-                }
-
-                $menu.css({
-                    top: menuTop + "px",
-                    left: menuLeft + "px"
-                });
+                const value = JSON.stringify(response, null, 4);
+                serviceEditorInstance.setValue(value, -1);
+                serviceEditorInstance.gotoLine(1);
+                const editServiceDialogElement = document.getElementById("editServiceDialog");
+                $(editServiceDialogElement).attr("newService", false);
+                getEditServiceDialogInstance()["open"]();
             }).fail((xhr, status, error) => {
                 console.error("Error fetching data:", error);
                 displayBanner(xhr);
             });
         }
-    });
-
-    // Handle edit with plain editor - use event delegation for persistence
-    $(document).off("click.editServicePlain").on("click.editServicePlain", "button[name=editServicePlain]", function () {
-        if (currentEditServiceData) {
-            const value = JSON.stringify(currentEditServiceData, null, 4);
-            serviceEditorInstance.setValue(value, -1);
-            serviceEditorInstance.gotoLine(1);
-            const editServiceDialogElement = document.getElementById("editServiceDialog");
-            $(editServiceDialogElement).attr("newService", false);
-            editServiceDialogInstance["open"]();
-            $("#editServiceMenuContainer").hide();
-            currentEditServiceData = null;
-        }
-    });
-
-    // Handle edit with wizard - use event delegation for persistence
-    $(document).off("click.editServiceWizard").on("click.editServiceWizard", "button[name=editServiceWizard]", function () {
-        if (currentEditServiceData) {
-            openRegisteredServiceWizardDialog(currentEditServiceData);
-            $("#editServiceMenuContainer").hide();
-            currentEditServiceData = null;
-        }
-    });
+    }
 
     $("button[name=saveService],button[name=saveServiceWizard]").off().on("click", function () {
         if (CasActuatorEndpoints.registeredServices()) {
             let isNewService = false;
             let value = "";
+            let dialogInstance = null;
 
             const saveButton = $(this);
             switch (saveButton.attr("name")) {
@@ -297,11 +319,13 @@ async function initializeServiceButtons() {
                 isNewService = $(editServiceWizardDialogElement).attr("newService") === "true";
                 const wizardEditor = initializeAceEditor("wizardServiceEditor");
                 value = wizardEditor.getValue();
+                dialogInstance = editServiceWizardDialog;
                 break;
             case "saveService":
                 const editServiceDialogElement = document.getElementById("editServiceDialog");
                 isNewService = $(editServiceDialogElement).attr("newService") === "true";
                 value = serviceEditorInstance.getValue();
+                dialogInstance = getEditServiceDialogInstance();
                 break;
             }
 
@@ -320,7 +344,7 @@ async function initializeServiceButtons() {
                             contentType: "application/json",
                             data: value,
                             success: async response => {
-                                editServiceDialog["close"]();
+                                dialogInstance["close"]();
                                 await fetchServices(() => {
                                     let newServiceId = response.id;
                                     $("#applicationsTable tr").removeClass("selected");
@@ -341,9 +365,8 @@ async function initializeServiceButtons() {
         }
     });
 
-    $("button[name=copyService]").off().on("click", function () {
+    function copyService(serviceId) {
         if (CasActuatorEndpoints.registeredServices()) {
-            let serviceId = $(this).parent().attr("serviceId");
             $.get(`${CasActuatorEndpoints.registeredServices()}/${serviceId}`, response => {
                 let clone = {...response};
                 clone.serviceId = "...";
@@ -362,11 +385,50 @@ async function initializeServiceButtons() {
 
                 const editServiceDialogElement = document.getElementById("editServiceDialog");
                 $(editServiceDialogElement).attr("newService", true);
-                editServiceDialogInstance["open"]();
+                getEditServiceDialogInstance()["open"]();
             }).fail((xhr, status, error) => {
                 console.error("Error fetching data:", error);
                 displayBanner(xhr);
             });
+        }
+    }
+
+    const applicationsTable = $("#applicationsTable").DataTable();
+    initializeDataTableContextMenu({
+        table: applicationsTable,
+        selector: "#applicationsTable tbody tr",
+        items: {
+            editPlain: {name: "Edit in Editor", icon: contextMenuIcon("mdi-pencil")},
+            editWizard: {name: "Edit in Wizard", icon: contextMenuIcon("mdi-wizard-hat")},
+            copy: {name: "Copy Service Definition", icon: contextMenuIcon("mdi-content-copy")},
+            delete: {name: "Delete Service Definition", icon: contextMenuIcon("mdi-delete")},
+            sep1: "---------",
+            history: {
+                name: "View Change History",
+                icon: contextMenuIcon("mdi-history"),
+                visible: () => CasActuatorEndpoints.entityHistory()
+            },
+            changelog: {
+                name: "View Change Log",
+                icon: contextMenuIcon("mdi-delta"),
+                visible: () => CasActuatorEndpoints.entityHistory()
+            }
+        },
+        callback: (key, context) => {
+            const serviceId = context.rowData.serviceId;
+            if (key === "editPlain") {
+                editService(serviceId, false);
+            } else if (key === "editWizard") {
+                editService(serviceId, true);
+            } else if (key === "copy") {
+                copyService(serviceId);
+            } else if (key === "delete") {
+                deleteService(context);
+            } else if (key === "history") {
+                viewEntityHistory(serviceId);
+            } else if (key === "changelog") {
+                viewEntityChangelog(serviceId);
+            }
         }
     });
 }
@@ -415,45 +477,13 @@ async function fetchServices(callback) {
                     serviceIdDetails += `<br><p><a href='${service.metadataLocation}' target='_blank'>Metadata Location</a>`;
                 }
 
-                let serviceButtons = `
-                 <button type="button" name="editService" href="#" serviceId='${service.id}'
-                        title="Edit Service Definition"
-                        class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                    <i class="mdi mdi-pencil min-width-32x" aria-hidden="true"></i>
-                </button>
-                <button type="button" name="deleteService" href="#" serviceId='${service.id}'
-                        title="Delete Service Definition"
-                        class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                    <i class="mdi mdi-delete min-width-32x" aria-hidden="true"></i>
-                </button>
-                <button type="button" name="copyService" href="#" serviceId='${service.id}'
-                        title="Copy Service Definition"
-                        class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                    <i class="mdi mdi-content-copy min-width-32x" aria-hidden="true"></i>
-                </button>
-                `;
-                if (CasActuatorEndpoints.entityHistory()) {
-                    serviceButtons += `
-                    <button type="button" name="viewEntityHistory" href="#" serviceId='${service.id}'
-                            title="View Change History"
-                            class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                        <i class="mdi mdi-history min-width-32x" aria-hidden="true"></i>
-                    </button>
-                    <button type="button" name="viewEntityChangelog" href="#" serviceId='${service.id}'
-                            title="View Change Log"
-                            class="mdc-button mdc-button--raised btn btn-link min-width-32x">
-                        <i class="mdi mdi-delta min-width-32x" aria-hidden="true"></i>
-                    </button>
-                    `;
-                }
-
                 applicationsTable.row.add({
                     0: `<i serviceId='${service.id}' title='${serviceClass}' class='mdi ${icon}'></i>`,
                     1: `${serviceDetails}`,
                     2: `${serviceIdDetails}`,
                     3: `<span serviceId='${service.id}' class="text-wrap">${service.description ?? ""}</span>`,
-                    4: `<span serviceId='${service.id}'>${serviceButtons.trim()}</span>`,
-                    5: `${service.id}`
+                    4: `${service.id}`,
+                    serviceId: service.id
                 });
 
                 let metadataSourcesCount = 0;
@@ -480,8 +510,10 @@ async function fetchServices(callback) {
             applicationsTable.search("").draw();
             saml2MetadataProvidersTable.search("").draw();
 
-            servicesChart.data.datasets[0].data = serviceCountByType;
-            servicesChart.update();
+            if (servicesChart) {
+                servicesChart.data.datasets[0].data = serviceCountByType;
+                servicesChart.update();
+            }
 
             if (callback !== undefined) {
                 callback(applicationsTable);
@@ -494,23 +526,30 @@ async function fetchServices(callback) {
 }
 
 async function initializeFooterButtons() {
+    $("button[name=cancelServiceWizard]").off().on("click", () => {
+        const element = $("#editServiceWizardDialog");
+        if (element.hasClass("ui-dialog-content")) {
+            element.dialog("close");
+        }
+    });
+
+    $("button[name=cancelService]").off().on("click", () => {
+        const element = $("#editServiceDialog");
+        if (element.hasClass("ui-dialog-content")) {
+            element.dialog("close");
+        }
+    });
+
     $("button[name=copyServiceDefinitionWizard]").off().on("click", () => {
         const editor = initializeAceEditor("wizardServiceEditor");
         copyToClipboard(editor.getValue());
     });
 
     $("button[name=validateServiceWizard]").off().on("click", () => {
-        const $accordion = $("#editServiceWizardMenu");
         let valid = true;
-        const originalIndex = $("#editServiceWizardMenu").accordion("option", "active");
-        $("#editServiceWizardMenu .ui-accordion-header:visible").each(function () {
-            const $header = $(this);
-            const index = $accordion
-                .find(".ui-accordion-header")
-                .index($header);
-            $accordion.accordion("option", "active", index);
-
-            $("#editServiceWizardForm .ui-accordion-content:visible input:visible").each(function () {
+        const originalKey = RegisteredServiceSections.currentKey();
+        RegisteredServiceSections.eachAvailableSection(section => {
+            $(section.panel).find("input:visible").each(function () {
                 const input = $(this);
                 valid = input.get(0).checkValidity();
                 if (!valid) {
@@ -518,15 +557,13 @@ async function initializeFooterButtons() {
                     return false;
                 }
             });
-            if (!valid) {
-                return false;
-            }
+            return valid;
         });
         if (valid) {
-            const currentIndex = $("#editServiceWizardMenu").accordion("option", "active");
-            if (originalIndex !== currentIndex) {
-                $("#editServiceWizardMenu").accordion("option", "active", originalIndex);
+            if (RegisteredServiceSections.currentKey() !== originalKey) {
+                RegisteredServiceSections.activate(originalKey);
             }
+            RegisteredServiceSections.render();
             if (CasActuatorEndpoints.registeredServices()) {
                 const editor = initializeAceEditor("wizardServiceEditor");
                 $.ajax({
@@ -559,13 +596,12 @@ async function initializeFooterButtons() {
     $("button[name=newServicePlain]").off().on("click", () => {
         if (CasActuatorEndpoints.registeredServices()) {
             const editServiceDialogElement = document.getElementById("editServiceDialog");
-            let editServiceDialog = window.mdc.dialog.MDCDialog.attachTo(editServiceDialogElement);
             const editor = initializeAceEditor("serviceEditor", "json");
             editor.setValue("");
             editor.gotoLine(1);
 
             $(editServiceDialogElement).attr("newService", true);
-            editServiceDialog["open"]();
+            getEditServiceDialogInstance()["open"]();
         }
     });
 

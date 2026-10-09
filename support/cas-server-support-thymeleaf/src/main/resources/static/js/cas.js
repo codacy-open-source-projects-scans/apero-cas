@@ -8,7 +8,7 @@ function randomWord() {
         "sleepy", "stoic", "strange", "suspicious", "sweet", "tender", "thirsty",
         "trusting", "unruffled", "upbeat", "vibrant", "vigilant", "vigorous",
         "wizardly", "wonderful", "youthful", "zealous", "zen",
-        "ambitious", "amiable", "astute", "bubbly", "calm",
+        "ambitious", "amiable", "astute", "bubbly", "calm", "nice",
         "carefree", "cheerful", "curious", "daring", "delightful",
         "eager", "earnest", "ecstatic", "elegant", "energetic",
         "fearless", "festive", "friendly", "gentle", "gleeful",
@@ -107,7 +107,7 @@ function isNumeric(str) {
 }
 
 function copyToClipboard(str) {
-    navigator.clipboard.writeText(str)
+    return navigator.clipboard.writeText(str)
         .then(() => {
             console.info("Copied text to clipboard");
         })
@@ -121,6 +121,43 @@ function camelcaseToTitleCase(str) {
         .replace(/([A-Z])/g, " $1")
         .replace(/^./, char => char.toUpperCase())
         .trim();
+}
+
+function changeLanguage(lang) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('locale', lang);
+    window.location.href = url.toString();
+}
+
+function setDirectionOnFields() {
+    const textElements = [
+        "p",
+        "span",
+        "a",
+        "button",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "i",
+        "b",
+        "div",
+        "strong",
+        "label",
+        "li",
+        "td",
+        "th",
+        "option"
+    ].join(", ");
+
+    $(textElements)
+        .not("[dir]")
+        .attr("dir", "auto");
+    $("input[type='text'], input[type='search'], input[type='email'], textarea")
+        .not("[dir]")
+        .attr("dir", "auto");
 }
 
 function flattenJSON(data) {
@@ -436,6 +473,179 @@ function isStorageAvailable(type) {
     }
 }
 
+const CAS_BROWSER_STORAGE_COOKIE_PREFIX = "CasBrowserStorage_";
+const CAS_BROWSER_STORAGE_COOKIE_COUNT_SUFFIX = "_n";
+const CAS_BROWSER_STORAGE_COOKIE_CHUNK_LENGTH = 3800;
+const CAS_BROWSER_STORAGE_COOKIE_MAX_CHUNKS = 40;
+
+function browserStorageCookiePath(path) {
+    let cookiePath = path;
+    if (cookiePath === undefined || cookiePath === null) {
+        cookiePath = typeof casBrowserStorageCookiePath === "string" ? casBrowserStorageCookiePath : "/";
+    }
+    cookiePath = cookiePath.split(";")[0].replace(/\/+$/, "");
+    return cookiePath === "" ? "/" : cookiePath;
+}
+
+function encodeBrowserStorageCookieToken(value) {
+    return Array.from(new TextEncoder().encode(value))
+        .map(b => /[A-Za-z0-9.~-]/.test(String.fromCharCode(b))
+            ? String.fromCharCode(b)
+            : `%${b.toString(16).toUpperCase().padStart(2, "0")}`)
+        .join("");
+}
+
+function browserStorageCookieName(context, suffix) {
+    return `${CAS_BROWSER_STORAGE_COOKIE_PREFIX}${encodeBrowserStorageCookieToken(context)}_${suffix}`;
+}
+
+function setBrowserStorageCookie(name, value, path, maxAge) {
+    let cookie = `${name}=${value}; Path=${path}; SameSite=Lax`;
+    if (window.location.protocol === "https:") {
+        cookie += "; Secure";
+    }
+    if (typeof maxAge === "number") {
+        cookie += `; Max-Age=${maxAge}`;
+    }
+    document.cookie = cookie;
+}
+
+function readBrowserStorageCookies() {
+    const cookies = {};
+    let allCookies;
+    try {
+        allCookies = document.cookie;
+    } catch (e) {
+        console.error(`Browser does not support cookies: ${e}`);
+        return cookies;
+    }
+    (allCookies ?? "").split(";").forEach(entry => {
+        const index = entry.indexOf("=");
+        if (index > 0) {
+            const name = entry.substring(0, index).trim();
+            if (name.startsWith(CAS_BROWSER_STORAGE_COOKIE_PREFIX)) {
+                cookies[name] = entry.substring(index + 1).trim();
+            }
+        }
+    });
+    return cookies;
+}
+
+function splitIntoBrowserStorageCookieChunks(value, maxLength) {
+    const chunks = [];
+    let remaining = value;
+    while (remaining.length > 0) {
+        let size = Math.min(remaining.length, maxLength);
+        let encoded;
+        do {
+            const code = remaining.charCodeAt(size - 1);
+            if (size > 1 && size < remaining.length && code >= 0xD800 && code <= 0xDBFF) {
+                size--;
+            }
+            encoded = encodeURIComponent(remaining.substring(0, size));
+            if (encoded.length > maxLength) {
+                size = Math.max(1, Math.floor(size * maxLength / encoded.length));
+            }
+        } while (encoded.length > maxLength);
+        chunks.push(encoded);
+        remaining = remaining.substring(size);
+    }
+    return chunks;
+}
+
+function writeToCookieStorage(browserStorage, path) {
+    const cookiePath = browserStorageCookiePath(path);
+    const payload = browserStorage.payload ?? "";
+    try {
+        clearCookieStorage(cookiePath, browserStorage.context);
+        const chunks = splitIntoBrowserStorageCookieChunks(payload, CAS_BROWSER_STORAGE_COOKIE_CHUNK_LENGTH);
+        if (chunks.length > CAS_BROWSER_STORAGE_COOKIE_MAX_CHUNKS) {
+            console.error(`Browser storage payload needs ${chunks.length} cookies, which exceeds the limit of ${CAS_BROWSER_STORAGE_COOKIE_MAX_CHUNKS}`);
+            return false;
+        }
+        chunks.forEach((chunk, index) =>
+            setBrowserStorageCookie(browserStorageCookieName(browserStorage.context, index), chunk, cookiePath));
+        setBrowserStorageCookie(browserStorageCookieName(browserStorage.context, "n"), `${chunks.length}`, cookiePath);
+        if (readFromCookieStorage()[browserStorage.context] === payload) {
+            console.info(`Stored ${payload.length} characters in ${chunks.length} cookie(s) under key ${browserStorage.context} at path ${cookiePath}`);
+            return true;
+        }
+        console.error(`Browser did not accept the cookies for key ${browserStorage.context}`);
+    } catch (e) {
+        console.error(`Failed to write to cookies: ${e}`);
+    }
+    clearCookieStorage(cookiePath, browserStorage.context);
+    return false;
+}
+
+function readFromCookieStorage() {
+    const cookies = readBrowserStorageCookies();
+    const payload = {};
+    Object.keys(cookies)
+        .filter(name => name.endsWith(CAS_BROWSER_STORAGE_COOKIE_COUNT_SUFFIX))
+        .forEach(countName => {
+            try {
+                const encodedContext = countName.substring(CAS_BROWSER_STORAGE_COOKIE_PREFIX.length,
+                    countName.length - CAS_BROWSER_STORAGE_COOKIE_COUNT_SUFFIX.length);
+                const count = Number(cookies[countName]);
+                if (!Number.isInteger(count) || count < 0 || count > CAS_BROWSER_STORAGE_COOKIE_MAX_CHUNKS) {
+                    return;
+                }
+                let value = "";
+                for (let index = 0; index < count; index++) {
+                    const chunk = cookies[`${CAS_BROWSER_STORAGE_COOKIE_PREFIX}${encodedContext}_${index}`];
+                    if (chunk === undefined) {
+                        return;
+                    }
+                    value += decodeURIComponent(chunk);
+                }
+                payload[decodeURIComponent(encodedContext)] = value;
+            } catch (e) {
+                console.error(`Failed to read cookie ${countName}: ${e}`);
+            }
+        });
+    return payload;
+}
+
+function clearCookieStorage(path, context) {
+    const cookiePath = browserStorageCookiePath(path);
+    const prefix = context === undefined || context === null
+        ? CAS_BROWSER_STORAGE_COOKIE_PREFIX
+        : `${CAS_BROWSER_STORAGE_COOKIE_PREFIX}${encodeBrowserStorageCookieToken(context)}_`;
+    Object.keys(readBrowserStorageCookies())
+        .filter(name => name.startsWith(prefix))
+        .forEach(name => setBrowserStorageCookie(name, "", cookiePath, 0));
+}
+
+function writeToBrowserStorage(browserStorage, path) {
+    let success = false;
+    try {
+        success = browserStorage.storageType === "SESSION"
+            ? writeToSessionStorage(browserStorage)
+            : writeToLocalStorage(browserStorage);
+    } catch (e) {
+        console.error(`Failed to write to browser storage: ${e}`);
+    }
+    if (success) {
+        clearCookieStorage(path, browserStorage.context);
+        return true;
+    }
+    console.warn("Browser storage is unavailable; falling back to cookies");
+    return writeToCookieStorage(browserStorage, path);
+}
+
+function readFromBrowserStorage(browserStorage) {
+    let payload = null;
+    try {
+        payload = browserStorage.storageType === "SESSION"
+            ? readFromSessionStorage()
+            : readFromLocalStorage();
+    } catch (e) {
+        console.error(`Failed to read from browser storage: ${e}`);
+    }
+    return Object.assign(payload ?? {}, readFromCookieStorage());
+}
+
 function loginFormSubmission() {
     return true;
 }
@@ -487,6 +697,8 @@ function resourceLoadedSuccessfully() {
         if (typeof hljs !== "undefined") {
             hljs.highlightAll();
         }
+
+        setDirectionOnFields();
     });
 }
 
@@ -512,11 +724,111 @@ function autoHideElement(id, timeout = 1500) {
     setTimeout(hideElement, timeout);
 }
 
-function initializeAceEditor(id, mode = "json") {
+async function isIndexedDbAvailable() {
+    if (!("indexedDB" in window)) {
+        console.error("Browser does not support IndexedDb");
+        return false;
+    }
+    try {
+        const db = new Dexie("indexeddb-support-test");
+        db.version(1).stores({
+            test: "id"
+        });
+        await db.open();
+        db.close();
+        await Dexie.delete("indexeddb-support-test");
+        console.info("IndexedDB is supported");
+        return true;
+    } catch (e) {
+        console.error(`Browser does not support IndexedDb: ${e}`);
+        return false;
+    }
+}
+
+function handleScopeApproval(approvalKey, recordKey, dbName) {
+    const allowLink = document.getElementById("allow");
+    const targetUrl = allowLink.href;
+
+    function redirectToApplication() {
+        $("#progressPanel").removeClass("d-none");
+        $("#scopeContainer").addClass("d-none");
+        window.location.href = targetUrl;
+    }
+
+    isIndexedDbAvailable().then(available => {
+
+        
+        if (available) {
+            async function recordApproval() {
+                await db.approvals.delete(recordKey);
+                await db.approvals.put({
+                    recordKey: recordKey,
+                    approvalKey: approvalKey,
+                    createdAt: new Date().toISOString()
+                });
+            }
+
+            async function hasApproval() {
+                const entry = await db.approvals.get(recordKey);
+                if (entry) {
+                    return entry.approvalKey === approvalKey;
+                }
+                return false;
+            }
+
+            console.info("IndexedDB is available. Initializing database and checking for approval record...");
+            const db = new Dexie(dbName);
+            db.version(1).stores({
+                approvals: "recordKey, approvalKey, createdAt"
+            });
+
+            console.info(`Checking for existing approval record for ${recordKey} / ${approvalKey} in IndexedDB...`);
+            hasApproval().then(found => {
+                if (found) {
+                    console.info(`Found approval record; navigating to ${targetUrl}`);
+                    redirectToApplication();
+                } else {
+                    console.info(`Record needs to be approved...`);
+                    $("#scopeContainer").removeClass("d-none");
+
+                    allowLink.addEventListener("click", async function (event) {
+                        event.preventDefault();
+                        try {
+                            await recordApproval(approvalKey);
+                            console.info(`Approval recorded found IndexedDB. Navigating to ${targetUrl}`);
+                            redirectToApplication();
+                        } catch (e) {
+                            console.error(`Failed to record approval ${approvalKey} in IndexedDB.`, e);
+                        }
+                    });
+                }
+            })
+        } else {
+            redirectToApplication();
+        }
+    });
+}
+
+/**
+ * Build an Ace editor.
+ *
+ * Pass useWorker: false for an editor that only displays content. Setting a mode otherwise starts
+ * a background web worker that re-parses the whole document on every change and on a timer; for a
+ * read-only view of server-generated content that only produces annotations nobody can act on, and
+ * on a large document -- SAML metadata above all -- it is the most expensive thing on the page.
+ * Disabling it before the mode is set stops the worker being spawned at all.
+ *
+ * @param id the element id to attach to
+ * @param mode the Ace mode name, without the "ace/mode/" prefix
+ * @param useWorker whether the mode's background syntax worker should run
+ * @returns the Ace editor
+ */
+function initializeAceEditor(id, mode = "json", {useWorker = true} = {}) {
     ace.require("ace/ext/language_tools");
     const beautify = ace.require("ace/ext/beautify");
     const editor = ace.edit(id);
     editor.setTheme("ace/theme/cobalt");
+    editor.session.setUseWorker(useWorker);
     editor.session.setMode(`ace/mode/${mode}`);
     editor.session.setUseWrapMode(true);
     editor.session.setTabSize(4);

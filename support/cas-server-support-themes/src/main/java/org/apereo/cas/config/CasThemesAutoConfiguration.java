@@ -72,13 +72,13 @@ public class CasThemesAutoConfiguration {
     @Bean
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     public ThemeResolver themeResolver(
-        final ObjectProvider<@NonNull CasConfigurationProperties> casProperties,
+        final ObjectProvider<CasConfigurationProperties> casProperties,
         @Qualifier(TenantExtractor.BEAN_NAME)
-        final ObjectProvider<@NonNull TenantExtractor> tenantExtractor,
+        final ObjectProvider<TenantExtractor> tenantExtractor,
         @Qualifier(AuthenticationServiceSelectionPlan.BEAN_NAME)
-        final ObjectProvider<@NonNull AuthenticationServiceSelectionPlan> authenticationRequestServiceSelectionStrategies,
+        final ObjectProvider<AuthenticationServiceSelectionPlan> authenticationRequestServiceSelectionStrategies,
         @Qualifier(ServicesManager.BEAN_NAME)
-        final ObjectProvider<@NonNull ServicesManager> servicesManager) {
+        final ObjectProvider<ServicesManager> servicesManager) {
 
         val defaultThemeName = casProperties.getObject().getTheme().getDefaultThemeName();
         val fixedResolver = new FixedThemeResolver();
@@ -98,7 +98,7 @@ public class CasThemesAutoConfiguration {
         val header = new RequestHeaderThemeResolver(casProperties.getObject().getTheme().getParamName());
         header.setDefaultThemeName(defaultThemeName);
 
-        val chainingThemeResolver = new ChainingThemeResolver();
+        val chainingThemeResolver = new ChainingThemeResolver(casProperties);
         chainingThemeResolver
             .addResolver(cookieThemeResolver)
             .addResolver(sessionThemeResolver)

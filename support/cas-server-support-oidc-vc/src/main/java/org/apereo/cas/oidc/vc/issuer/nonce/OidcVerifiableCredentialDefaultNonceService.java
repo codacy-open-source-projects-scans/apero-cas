@@ -5,6 +5,7 @@ import org.apereo.cas.oidc.OidcConfigurationContext;
 import org.apereo.cas.ticket.TransientSessionTicket;
 import org.apereo.cas.ticket.TransientSessionTicketFactory;
 import org.apereo.cas.util.function.FunctionUtils;
+import io.micrometer.common.util.StringUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
@@ -26,15 +27,37 @@ public class OidcVerifiableCredentialDefaultNonceService implements OidcVerifiab
             val transientFactory = (TransientSessionTicketFactory) configurationContext.getTicketFactory()
                 .get(TransientSessionTicket.class);
             val ticket = transientFactory.create(Map.of());
-            configurationContext.getTicketRegistry().addTicket(ticket);
-            val expiresAt = ticket.getExpirationPolicy().toMaximumExpirationTime(ticket).toInstant();
-            return new VerifiableCredentialNonce(ticket.getId(), expiresAt);
+            val storedTicket = configurationContext.getTicketRegistry().addTicket(ticket);
+            val expiresIn = ticket.getExpirationPolicy().getTimeToLive();
+            return new VerifiableCredentialNonce(storedTicket.getId(), expiresIn);
         });
     }
 
     @Override
-    public void remove(final String nonce) {
-        FunctionUtils.doUnchecked(_ -> configurationContext.getTicketRegistry().deleteTicket(nonce));
+    public int remove(final String nonce) {
+        return StringUtils.isNotBlank(nonce)
+            ? Objects.requireNonNullElse(
+                FunctionUtils.doAndHandle(() -> configurationContext.getTicketRegistry().deleteTicket(nonce)), 0)
+            : 0;
+    }
+
+    /**
+     * Consume the nonce, where the delete itself is the decision rather than a read that precedes it.
+     * The registry discards an expired ticket on lookup and reports how many tickets it actually
+     * removed, so an unknown, expired or already spent nonce counts zero and exactly one of several
+     * concurrent callers can count one. A read beforehand would decide nothing and would cost another
+     * registry round trip on every credential request. A registry that cannot delete, the stateless
+     * registry, cannot make a nonce single use: only when the delete removed nothing is the nonce read,
+     * and a valid stateless nonce is then accepted until it expires.
+     *
+     * @param nonce the nonce
+     * @return true if this caller is the one that consumed the nonce
+     */
+    @Override
+    public boolean consume(final String nonce) {
+        val consumed = remove(nonce) > 0 || isStatelessAndValid(nonce);
+        LOGGER.debug("Nonce [{}] was consumed: [{}]", nonce, consumed);
+        return consumed;
     }
 
     @Override
@@ -44,5 +67,12 @@ public class OidcVerifiableCredentialDefaultNonceService implements OidcVerifiab
             LOGGER.debug("Found nonce ticket [{}] for [{}]", ticket, nonce);
             return ticket != null && !ticket.isExpired();
         });
+    }
+
+    private boolean isStatelessAndValid(final String nonce) {
+        return StringUtils.isNotBlank(nonce) && Boolean.TRUE.equals(FunctionUtils.doAndHandle(() -> {
+            val ticket = configurationContext.getTicketRegistry().getTicket(nonce);
+            return ticket != null && ticket.isStateless() && !ticket.isExpired();
+        }));
     }
 }

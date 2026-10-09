@@ -4,6 +4,8 @@ import module java.base;
 import org.apereo.cas.CentralAuthenticationService;
 import org.apereo.cas.configuration.CasConfigurationProperties;
 import org.apereo.cas.configuration.features.CasFeatureModule;
+import org.apereo.cas.ha.ClusterTopologyManager;
+import org.apereo.cas.kafka.KafkaClusterTopologyManager;
 import org.apereo.cas.kafka.KafkaObjectFactory;
 import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.ticket.TicketCatalog;
@@ -20,7 +22,6 @@ import lombok.val;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -63,7 +64,7 @@ public class CasKafkaTicketRegistryAutoConfiguration {
     @Bean
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = "kafkaTicketRegistryTemplate")
-    public KafkaOperations<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaTicketRegistryTemplate(
+    public KafkaOperations<String, BaseMessageQueueCommand> kafkaTicketRegistryTemplate(
         final ConfigurableApplicationContext applicationContext,
         final CasConfigurationProperties casProperties) {
         val kafka = casProperties.getTicket().getRegistry().getKafka();
@@ -94,7 +95,7 @@ public class CasKafkaTicketRegistryAutoConfiguration {
         @Qualifier(PublisherIdentifier.DEFAULT_BEAN_NAME)
         final PublisherIdentifier messageQueueTicketRegistryIdentifier,
         @Qualifier("kafkaTicketRegistryTemplate")
-        final KafkaOperations<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaTicketRegistryTemplate) {
+        final KafkaOperations<String, BaseMessageQueueCommand> kafkaTicketRegistryTemplate) {
         LOGGER.debug("Configuring Kafka ticket registry with identifier [{}]", messageQueueTicketRegistryIdentifier);
         return new KafkaTicketRegistryPublisher(applicationContext, ticketCatalog, kafkaTicketRegistryTemplate);
     }
@@ -109,18 +110,20 @@ public class CasKafkaTicketRegistryAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(name = "kafkaTicketRegistryConsumerFactory")
-    public ConsumerFactory<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaTicketRegistryConsumerFactory(
+    public ConsumerFactory<String, BaseMessageQueueCommand> kafkaTicketRegistryConsumerFactory(
         final ConfigurableApplicationContext applicationContext,
-        final CasConfigurationProperties casProperties) {
+        final CasConfigurationProperties casProperties,
+        @Qualifier(PublisherIdentifier.DEFAULT_BEAN_NAME)
+        final PublisherIdentifier messageQueueTicketRegistryIdentifier) {
         val kafka = casProperties.getTicket().getRegistry().getKafka();
         val config = Map.<String, Object>of(
             ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapAddress(),
-            ConsumerConfig.GROUP_ID_CONFIG, kafka.getGroupId()
+            ConsumerConfig.GROUP_ID_CONFIG, consumerGroupFor(kafka.getGroupId(), messageQueueTicketRegistryIdentifier)
         );
-        val factory = new DefaultKafkaConsumerFactory<@NonNull String, @NonNull BaseMessageQueueCommand>(config);
+        val factory = new DefaultKafkaConsumerFactory<String, BaseMessageQueueCommand>(config);
         factory.setKeyDeserializer(new StringDeserializer());
 
-        val valueDeserializer = new JacksonJsonDeserializer<@NonNull BaseMessageQueueCommand>(MAPPER);
+        val valueDeserializer = new JacksonJsonDeserializer<BaseMessageQueueCommand>(MAPPER);
         valueDeserializer.addTrustedPackages(Ticket.class.getPackageName());
         valueDeserializer.addTrustedPackages(BaseMessageQueueCommand.class.getPackageName());
         valueDeserializer.addTrustedPackages(CentralAuthenticationService.NAMESPACE);
@@ -132,35 +135,37 @@ public class CasKafkaTicketRegistryAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(name = "kafkaListenerContainerFactory")
-    public ConcurrentKafkaListenerContainerFactory<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaListenerContainerFactory(
+    public ConcurrentKafkaListenerContainerFactory<String, BaseMessageQueueCommand> kafkaListenerContainerFactory(
         @Qualifier("kafkaTicketRegistryConsumerFactory")
-        final ConsumerFactory<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaTicketRegistryConsumerFactory) {
-        val factory = new ConcurrentKafkaListenerContainerFactory<@NonNull String, @NonNull BaseMessageQueueCommand>();
+        final ConsumerFactory<String, BaseMessageQueueCommand> kafkaTicketRegistryConsumerFactory) {
+        val factory = new ConcurrentKafkaListenerContainerFactory<String, BaseMessageQueueCommand>();
         factory.setConsumerFactory(kafkaTicketRegistryConsumerFactory);
         return factory;
     }
 
     @Bean
     @ConditionalOnMissingBean(name = "kafkaTicketRegistryMessageListenerContainer")
-    public ConcurrentMessageListenerContainer<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaTicketRegistryMessageListenerContainer(
+    public ConcurrentMessageListenerContainer<String, BaseMessageQueueCommand> kafkaTicketRegistryMessageListenerContainer(
         @Qualifier("messageHandlerMethodFactory")
         final MessageHandlerMethodFactory messageHandlerMethodFactory,
         @Qualifier("messageQueueTicketRegistryReceiver")
         final QueueableTicketRegistryMessageReceiver messageQueueTicketRegistryReceiver,
+        @Qualifier(PublisherIdentifier.DEFAULT_BEAN_NAME)
+        final PublisherIdentifier messageQueueTicketRegistryIdentifier,
         final CasConfigurationProperties casProperties,
         @Qualifier("kafkaTicketRegistryConsumerFactory")
-        final ConsumerFactory<@NonNull String, @NonNull BaseMessageQueueCommand> kafkaTicketRegistryConsumerFactory,
+        final ConsumerFactory<String, BaseMessageQueueCommand> kafkaTicketRegistryConsumerFactory,
         @Qualifier(TicketCatalog.BEAN_NAME)
         final TicketCatalog ticketCatalog) throws Exception {
         
         val kafka = casProperties.getTicket().getRegistry().getKafka();
 
-        val factory = new ConcurrentKafkaListenerContainerFactory<@NonNull String, @NonNull BaseMessageQueueCommand>();
+        val factory = new ConcurrentKafkaListenerContainerFactory<String, BaseMessageQueueCommand>();
         factory.setConsumerFactory(kafkaTicketRegistryConsumerFactory);
         factory.setConcurrency(kafka.getConcurrency());
 
         val containerProperties = factory.getContainerProperties();
-        containerProperties.setGroupId(kafka.getGroupId());
+        containerProperties.setGroupId(consumerGroupFor(kafka.getGroupId(), messageQueueTicketRegistryIdentifier));
         
         val topics = ticketCatalog.findAll()
             .stream()
@@ -189,6 +194,31 @@ public class CasKafkaTicketRegistryAutoConfiguration {
         val factory = new DefaultMessageHandlerMethodFactory();
         factory.setConversionService(applicationContext.getEnvironment().getConversionService());
         return factory;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(name = "kafkaTicketRegistryClusterTopologyManager")
+    @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
+    public ClusterTopologyManager kafkaTicketRegistryClusterTopologyManager(
+        final CasConfigurationProperties casProperties) {
+        val kafka = casProperties.getTicket().getRegistry().getKafka();
+        val factory = new KafkaObjectFactory<String, BaseMessageQueueCommand>(kafka.getBootstrapAddress());
+        return new KafkaClusterTopologyManager(factory.getKafkaAdminClient());
+    }
+
+    /**
+     * The consumer group of this node. Every node keeps its own copy of the registry and must see
+     * every change, so each consumes in a group of its own: nodes that share a group split the
+     * topic partitions between them, and each change reaches one node rather than all of them.
+     * The node is told apart by its publisher identifier, as the AMQP registry names its queue
+     * and the Kafka service registry stream names its group.
+     *
+     * @param groupId    the configured group id, used as a prefix
+     * @param identifier the identifier of this node
+     * @return the consumer group of this node
+     */
+    private static String consumerGroupFor(final String groupId, final PublisherIdentifier identifier) {
+        return "%s-%s".formatted(groupId, identifier.getId());
     }
 }
 

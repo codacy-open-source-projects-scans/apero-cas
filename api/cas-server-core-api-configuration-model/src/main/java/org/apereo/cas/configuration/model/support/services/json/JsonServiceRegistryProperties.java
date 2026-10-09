@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
+import org.springframework.core.Ordered;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 
@@ -41,12 +42,19 @@ public class JsonServiceRegistryProperties extends SpringResourceProperties {
      */
     private boolean watcherEnabled = true;
 
+    /**
+     * The execution order of this registry
+     * which will determine its position in a chain
+     * in case multiple registries are defined.
+     */
+    private int order = Ordered.LOWEST_PRECEDENCE;
+    
     public JsonServiceRegistryProperties() {
         setLocation(DEFAULT_LOCATION);
     }
 
     /**
-     * Is using default location and has it changed?
+     * Determines whether the default location is used.
      *
      * @return true/false
      */

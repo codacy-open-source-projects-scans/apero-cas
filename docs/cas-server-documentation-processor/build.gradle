@@ -1,12 +1,17 @@
-description = "Apereo CAS Documentation Generator"
+apply plugin: "org.apereo.cas.project-conventions"
+
+import org.apereo.cas.gradle.CasBuildSettings
+import org.apereo.cas.gradle.CasProjectConventions
+
+description = "Generates CAS documentation metadata from configuration and source annotations."
 
 ext {
     mainClassName = "org.apereo.cas.documentation.CasDocumentationApplication"
-    forceBootifulArtifact = true
+    forceBootifulArtifact = !CasBuildSettings.isSkipBootifulArtifact(project)
     archiveFileName = "casdocsgen.jar"
 }
 
-apply from: rootProject.file("gradle/springboot.gradle")
+apply plugin: "org.apereo.cas.spring-boot-conventions"
 
 javadoc {
     enabled = false
@@ -16,8 +21,10 @@ test {
     enabled = false
 }
 
-tasks.named("bootJar") {
-    enabled = !rootProject.skipBootifulArtifact
+plugins.withId("org.springframework.boot") {
+    tasks.named("bootJar") {
+        enabled = !skipBootifulArtifact
+    }
 }
 
 if (tasks.findByName("install") != null) {
@@ -29,15 +36,34 @@ dependencies {
         implementation it.value
     }
 
-    rootProject.subprojects.each {
-        if (it != project) {
-            if (rootProject.projectShouldBePublished(it)) {
-                implementation it
+    CasBuildSettings.includedProjectPaths(project).each { includedProjectPath ->
+        if (includedProjectPath != project.path) {
+            def includedProjectName = CasBuildSettings.projectNameFromPath(includedProjectPath)
+            if (CasProjectConventions.shouldBePublished(includedProjectName)) {
+                if (includedProjectName == "cas-server-support-bom") {
+                    implementation(platform(project(path: includedProjectPath)))
+                } else {
+                    implementation(project(path: includedProjectPath))
+                }
             } else {
-                logger.debug("Skipping project for documentation processing: ${it.name}")
-                compileOnly it
+                logger.debug("Skipping project for documentation processing: ${includedProjectName}")
+                compileOnly(project(path: includedProjectPath))
             }
         }
+    }
+}
+
+tasks.register('docsGeneratorArguments') {
+    description = "Writes a java argument file that runs the generator from the runtime classpath, without packaging a boot jar."
+    def runtimeClasspath = sourceSets.main.runtimeClasspath
+    def mainClass = project.ext.mainClassName
+    def argumentsFile = layout.buildDirectory.file("casdocsgen.args")
+    inputs.files(runtimeClasspath)
+    inputs.property("mainClass", mainClass)
+    outputs.file(argumentsFile)
+    doLast {
+        def quote = { String value -> '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"' }
+        argumentsFile.get().asFile.text = ["-cp", quote(runtimeClasspath.asPath), mainClass].join(System.lineSeparator()) + System.lineSeparator()
     }
 }
 
@@ -58,7 +84,7 @@ tasks.register('jsonDependencies') {
             .toList()
         def jsonFile = new File(project.layout.buildDirectory.getAsFile().get(), "dependencies.json")
         def output = new groovy.json.JsonBuilder(results).toPrettyString();
-        jsonFile.delete()
-        jsonFile << output
+        jsonFile.parentFile.mkdirs()
+        jsonFile.text = output
     }
 }

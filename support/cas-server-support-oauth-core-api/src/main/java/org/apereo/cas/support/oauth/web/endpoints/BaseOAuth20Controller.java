@@ -10,7 +10,6 @@ import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.ticket.refreshtoken.OAuth20RefreshToken;
 import org.apereo.cas.web.AbstractController;
-import org.apereo.cas.web.support.CookieUtils;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -54,16 +53,11 @@ public abstract class BaseOAuth20Controller<T extends OAuth20ConfigurationContex
     }
 
     protected void ensureSessionReplicationIsAutoconfiguredIfNeedBe(final HttpServletRequest request) {
-        val replicationProps = getConfigurationContext().getCasProperties().getAuthn().getOauth().getSessionReplication();
-        val cookieAutoconfigured = replicationProps.getCookie().isAutoConfigureCookiePath();
-        if (replicationProps.isReplicateSessions() && cookieAutoconfigured) {
-            val cookieBuilder = getConfigurationContext().getOauthDistributedSessionCookieGenerator();
-            CookieUtils.configureCookiePath(request, cookieBuilder);
-        }
+        getConfigurationContext().configureSessionReplicationCookiePath(request);
     }
 
     protected boolean isRequestAuthenticated(final ProfileManager manager, final WebContext context,
-                                             final OAuthRegisteredService registeredService) {
+                                             @Nullable final OAuthRegisteredService registeredService) {
         return manager.getProfile().isPresent();
     }
 
@@ -72,7 +66,7 @@ public abstract class BaseOAuth20Controller<T extends OAuth20ConfigurationContex
     }
 
     /**
-     * Is the OAuth token a Refresh Token?
+     * Determines whether the OAuth token is a refresh token.
      *
      * @param token the token
      * @return whether the token type is a RefreshToken
@@ -82,7 +76,7 @@ public abstract class BaseOAuth20Controller<T extends OAuth20ConfigurationContex
     }
 
     /**
-     * Is the OAuth token an Access Token?
+     * Determines whether the OAuth token is an access token.
      *
      * @param token the token
      * @return whether the token type is a RefreshToken
@@ -107,13 +101,48 @@ public abstract class BaseOAuth20Controller<T extends OAuth20ConfigurationContex
             request.getParameter(OAuth20Constants.ACCESS_TOKEN),
             request.getParameter(OAuth20Constants.TOKEN));
         if (StringUtils.isBlank(accessToken)) {
-            val authHeader = request.getHeader(HttpConstants.AUTHORIZATION_HEADER);
-            if (StringUtils.isNotBlank(authHeader) && authHeader.toLowerCase(Locale.ENGLISH)
-                .startsWith(OAuth20Constants.TOKEN_TYPE_BEARER.toLowerCase(Locale.ENGLISH) + ' ')) {
-                accessToken = authHeader.substring(OAuth20Constants.TOKEN_TYPE_BEARER.length() + 1);
-            }
+            accessToken = extractAccessTokenFromAuthorizationHeader(request).orElse(accessToken);
         }
         LOGGER.debug("[{}]: [{}]", OAuth20Constants.ACCESS_TOKEN, accessToken);
         return Pair.of(accessToken, extractAccessTokenFrom(accessToken));
+    }
+
+    /**
+     * Access tokens reach a protected resource under an authentication scheme, and the scheme that
+     * applies depends on how the token was bound. Plain tokens use {@code Bearer} per RFC 6750,
+     * while sender-constrained tokens use {@code DPoP}: RFC 9449, section 7.1 states that "a
+     * DPoP-bound access token is sent using the Authorization request header field ... with an
+     * authentication scheme of DPoP". CAS answers the token request with {@code token_type: DPoP}
+     * whenever a proof accompanied it, so every protected resource here has to accept that scheme
+     * back; recognizing {@code Bearer} alone would reject the very tokens CAS just minted.
+     *
+     * @param request the request
+     * @return the access token carried by the authorization header, if any
+     */
+    protected Optional<String> extractAccessTokenFromAuthorizationHeader(final HttpServletRequest request) {
+        val authHeader = request.getHeader(HttpConstants.AUTHORIZATION_HEADER);
+        if (StringUtils.isBlank(authHeader)) {
+            return Optional.empty();
+        }
+        return Stream.of(OAuth20Constants.TOKEN_TYPE_BEARER, OAuth20Constants.TOKEN_TYPE_DPOP)
+            .filter(scheme -> StringUtils.startsWithIgnoreCase(authHeader, scheme + ' '))
+            .findFirst()
+            .map(scheme -> StringUtils.trimToNull(authHeader.substring(scheme.length() + 1)));
+    }
+
+    /**
+     * The authentication scheme the client used to present its access token, which is the scheme a
+     * {@code WWW-Authenticate} challenge has to answer in. Defaults to {@code Bearer} when the
+     * request carries no recognizable scheme, since that is what a client with no token should be
+     * told to use.
+     *
+     * @param request the request
+     * @return the authentication scheme
+     */
+    protected String resolveAuthorizationScheme(final HttpServletRequest request) {
+        val authHeader = request.getHeader(HttpConstants.AUTHORIZATION_HEADER);
+        return StringUtils.startsWithIgnoreCase(authHeader, OAuth20Constants.TOKEN_TYPE_DPOP + ' ')
+            ? OAuth20Constants.TOKEN_TYPE_DPOP
+            : OAuth20Constants.TOKEN_TYPE_BEARER;
     }
 }

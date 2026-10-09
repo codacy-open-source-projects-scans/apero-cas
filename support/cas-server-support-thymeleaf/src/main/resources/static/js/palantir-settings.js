@@ -16,7 +16,22 @@ function palantirSettings() {
     }
 }
 
+let palantirActuatorsTableBuilt = false;
+
+/**
+ * Build the table of resolved actuator endpoints shown in the settings dialog.
+ *
+ * The dialog is opened on demand, so the table is built the first time it is needed rather than
+ * during dashboard startup, and rebuilding is refused because DataTables cannot be initialized
+ * twice on the same element.
+ *
+ * @returns {Promise<void>} resolved once the table exists
+ */
 async function initializePalantirActuatorsTable() {
+    if (palantirActuatorsTableBuilt || $("#palantirActuatorsTable").length === 0) {
+        return;
+    }
+    palantirActuatorsTableBuilt = true;
     const palantirActuatorsTable = $("#palantirActuatorsTable").DataTable({
         pageLength: 5,
         columns: [
@@ -34,11 +49,13 @@ async function initializePalantirActuatorsTable() {
 
     CasActuatorEndpoints.all().forEach(endpoint => {
         const endpointAvailable = endpoint.value !== undefined && endpoint.value !== null;
+        if (!endpointAvailable) {
+            return;
+        }
         palantirActuatorsTable.row.add({
-            0: endpointAvailable
-                ? "<i class='mdc-tab__icon mdi mdi-check-circle' aria-hidden='true'></i>"
-                : "<i class='mdc-tab__icon mdi mdi-close-octagon' aria-hidden='true'></i>",
-            1: `<code>${endpointAvailable ? endpoint.value : `Endpoint ${endpoint.name} is unavailable.`}</code>`
+            0: "<i class='mdc-tab__icon mdi mdi-check-circle' aria-hidden='true'></i>"
+                + "<span class='palantir-sr-only'>Available</span>",
+            1: `<code>${endpoint.value}</code>`
         });
     });
     palantirActuatorsTable.draw();

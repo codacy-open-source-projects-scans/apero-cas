@@ -9,7 +9,7 @@ import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.ticket.Ticket;
-import org.apereo.cas.ticket.registry.TicketCompactor;
+import org.apereo.cas.ticket.registry.compact.TicketCompactor;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -44,6 +44,9 @@ class OAuth20CodeCompactorTests extends AbstractOAuth20Tests {
         val token = defaultOAuthCodeFactory.create(service, authentication, tgt,
             scopes, codeChallenge, codeChallengeMethod, clientId,
             claims, responseType, grantType);
+        val authorizationDetails = List.of(new LinkedHashMap<String, Object>(Map.of("type", "openid_credential",
+            "credential_configuration_id", "UniversityDegreeCredential")));
+        token.setAuthorizationDetails(authorizationDetails);
         assertSame(OAuth20Code.class, oauth20CodeTicketCompactor.getTicketType());
         val compacted = oauth20CodeTicketCompactor.compact(token);
         assertNotNull(compacted);
@@ -56,6 +59,7 @@ class OAuth20CodeCompactorTests extends AbstractOAuth20Tests {
         assertEquals(result.getResponseType(), token.getResponseType());
         assertEquals(result.getGrantType(), token.getGrantType());
         assertEquals(result.getAuthentication().getPrincipal(), token.getAuthentication().getPrincipal());
+        assertEquals(authorizationDetails, result.getAuthorizationDetails());
 
     }
 
@@ -70,7 +74,10 @@ class OAuth20CodeCompactorTests extends AbstractOAuth20Tests {
                 "clientid-code", Map.of(), OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE),
             Arguments.of(service, authentication,
                 tgt, Set.of(), null, null,
-                "clientid", Map.of(), OAuth20ResponseTypes.ID_TOKEN, OAuth20GrantTypes.CLIENT_CREDENTIALS)
+                "clientid", Map.of(), OAuth20ResponseTypes.ID_TOKEN, OAuth20GrantTypes.CLIENT_CREDENTIALS),
+            Arguments.of(service, RegisteredServiceTestUtils.getAuthentication("CN=Jane Doe,OU=Staff:Faculty,O=Example"),
+                tgt, Set.of("openid,profile", "email|phone", "offline#access"), "challenge,1:2#3|4", "S256",
+                "client,id:1", Map.of(), OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE)
         );
     }
 }

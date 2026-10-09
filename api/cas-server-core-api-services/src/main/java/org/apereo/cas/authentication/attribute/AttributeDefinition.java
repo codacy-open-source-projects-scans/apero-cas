@@ -68,7 +68,7 @@ public interface AttributeDefinition extends Serializable, Comparable<AttributeD
     String getAttribute();
 
     /**
-     * Template used in {@link java.text.MessageFormat} that will insert attribute value into the template.
+     * Template used in {@link MessageFormat} that will insert attribute value into the template.
      *
      * @return the template
      */
@@ -128,6 +128,13 @@ public interface AttributeDefinition extends Serializable, Comparable<AttributeD
      * @return the flattened
      */
     String getFlattened();
+
+    /**
+     * Indicate list of attribute definitions that are required to be resolved
+     * before this definition can proceed.
+     * @return list of attribute definitions by key that are required.
+     */
+    List<String> getDependsOn();
 
     /**
      * Resolve attribute values as list.

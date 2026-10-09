@@ -48,7 +48,7 @@ public class OAuth20IntrospectionEndpointController<T extends OAuth20Configurati
         super(context);
     }
 
-    private static ResponseEntity<@NonNull OAuth20IntrospectionAccessTokenFailureResponse> buildUnauthorizedResponseEntity(
+    private static ResponseEntity<OAuth20IntrospectionAccessTokenFailureResponse> buildUnauthorizedResponseEntity(
         final String code, final boolean isAuthenticationFailure) {
         val response = new OAuth20IntrospectionAccessTokenFailureResponse();
         response.setError(code);
@@ -59,7 +59,7 @@ public class OAuth20IntrospectionEndpointController<T extends OAuth20Configurati
         return new ResponseEntity<>(response, headers, HttpStatus.UNAUTHORIZED);
     }
 
-    private static ResponseEntity<@NonNull OAuth20IntrospectionAccessTokenFailureResponse> buildBadRequestResponseEntity(final String code) {
+    private static ResponseEntity<OAuth20IntrospectionAccessTokenFailureResponse> buildBadRequestResponseEntity(final String code) {
         val response = new OAuth20IntrospectionAccessTokenFailureResponse();
         response.setError(code);
         return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
@@ -124,7 +124,13 @@ public class OAuth20IntrospectionEndpointController<T extends OAuth20Configurati
                 "Service", registeredService.getName());
             LoggingUtils.protocolMessage("OpenID Connect Introspection Request", protocolMap);
 
-            val accessToken = fetchTokenFromRegistry(tokenId);
+            val requestedAccessToken = fetchTokenFromRegistry(tokenId);
+            val accessToken = requestedAccessToken == null
+                || !Objects.equals(registeredService.getClientId(), requestedAccessToken.getClientId()) ? null : requestedAccessToken;
+            if (requestedAccessToken != null && accessToken == null) {
+                LOGGER.warn("Authenticated client [{}] cannot introspect a token issued to client [{}]",
+                    registeredService.getClientId(), requestedAccessToken.getClientId());
+            }
             val introspect = getConfigurationContext()
                 .getIntrospectionResponseGenerator()
                 .stream()
@@ -132,7 +138,7 @@ public class OAuth20IntrospectionEndpointController<T extends OAuth20Configurati
                 .findFirst()
                 .orElseThrow()
                 .generate(tokenId, accessToken);
-            return buildIntrospectionEntityResponse(context, introspect);
+            return buildIntrospectionEntityResponse(context, introspect, registeredService);
         } catch (final Exception e) {
             LoggingUtils.error(LOGGER, e);
         }
@@ -188,5 +194,11 @@ public class OAuth20IntrospectionEndpointController<T extends OAuth20Configurati
     protected ResponseEntity buildIntrospectionEntityResponse(
         final WebContext context, final OAuth20IntrospectionAccessTokenResponse introspect) {
         return new ResponseEntity<>(introspect, HttpStatus.OK);
+    }
+
+    protected ResponseEntity buildIntrospectionEntityResponse(
+        final WebContext context, final OAuth20IntrospectionAccessTokenResponse introspect,
+        final OAuthRegisteredService registeredService) {
+        return buildIntrospectionEntityResponse(context, introspect);
     }
 }

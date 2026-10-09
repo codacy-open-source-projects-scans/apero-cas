@@ -8,8 +8,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.SuperBuilder;
 import lombok.With;
-import lombok.experimental.SuperBuilder;
 import lombok.extern.jackson.Jacksonized;
 import lombok.val;
 
@@ -56,7 +56,7 @@ public class ThrottledSubmission implements Serializable {
     }
 
     /**
-     * Is the entry still locked and in its expiration window?
+     * Determines whether the entry is still locked and in its expiration window.
      *
      * @return true/false
      */

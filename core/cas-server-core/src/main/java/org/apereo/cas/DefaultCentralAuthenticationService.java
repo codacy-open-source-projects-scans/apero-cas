@@ -247,18 +247,18 @@ public class DefaultCentralAuthenticationService extends AbstractCentralAuthenti
                 CollectionUtils.wrap(CoreAuthenticationUtils.isRememberMeAuthentication(authentication)));
 
             val finalAuthentication = builder.build();
-            val releasePolicyContext = RegisteredServiceAttributeReleasePolicyContext.builder()
-                .registeredService(registeredService)
-                .service(service)
-                .applicationContext(configurationContext.getApplicationContext())
-                .principal(principal)
-                .build();
-            val policyAttributes = registeredService.getAttributeReleasePolicy().getAttributes(releasePolicyContext);
+            /*
+             * The attribute release policy is evaluated once, against the resolved service. The
+             * principal carried by the final authentication is built from exactly those attributes,
+             * so merging it below is what puts the released set into the principal the access
+             * strategy sees; evaluating the policy a second time here would only repeat that work,
+             * and doing so against the unresolved service would let a service-aware policy decide
+             * access on a different service than the one the attributes are released to.
+             */
             val merger = CoreAuthenticationUtils.getAttributeMerger(PrincipalAttributesCoreProperties.MergingStrategyTypes.MULTIVALUED);
             var accessAttributes = CoreAuthenticationUtils.mergeAttributes(principal.getAttributes(), authentication.getAttributes(), merger);
             accessAttributes = CoreAuthenticationUtils.mergeAttributes(accessAttributes, finalAuthentication.getPrincipal().getAttributes(), merger);
             accessAttributes = CoreAuthenticationUtils.mergeAttributes(accessAttributes, finalAuthentication.getAttributes(), merger);
-            accessAttributes = CoreAuthenticationUtils.mergeAttributes(accessAttributes, policyAttributes, merger);
             val accessPrincipal = configurationContext.getPrincipalFactory().createPrincipal(principal.getId(), accessAttributes);
 
             enforceRegisteredServiceAccess(selectedService, registeredService, accessPrincipal);
@@ -302,12 +302,21 @@ public class DefaultCentralAuthenticationService extends AbstractCentralAuthenti
     @Override
     public Ticket createProxyGrantingTicket(final String serviceTicketId,
                                             final AuthenticationResult authenticationResult) throws Throwable {
-
         val serviceTicket = configurationContext.getTicketRegistry().getTicket(serviceTicketId, ServiceTicket.class);
         if (serviceTicket == null || serviceTicket.isExpired()) {
             LOGGER.debug("ServiceTicket [{}] has expired or cannot be found in the ticket registry", serviceTicketId);
             throw new InvalidTicketException(serviceTicketId);
         }
+        return createProxyGrantingTicket(serviceTicket, authenticationResult);
+    }
+
+    @Audit(
+        action = AuditableActions.PROXY_GRANTING_TICKET,
+        actionResolverName = AuditActionResolvers.CREATE_PROXY_GRANTING_TICKET_RESOLVER,
+        resourceResolverName = AuditResourceResolvers.CREATE_PROXY_GRANTING_TICKET_RESOURCE_RESOLVER)
+    @Override
+    public Ticket createProxyGrantingTicket(final ServiceTicket serviceTicket,
+                                            final AuthenticationResult authenticationResult) throws Throwable {
         val registeredService = (CasModelRegisteredService) configurationContext.getServicesManager()
             .findServiceBy(serviceTicket.getService());
 
@@ -330,7 +339,7 @@ public class DefaultCentralAuthenticationService extends AbstractCentralAuthenti
                     val factory = (ProxyGrantingTicketFactory) configurationContext.getTicketFactory().get(ProxyGrantingTicket.class);
                     val proxyGrantingTicket = factory.create(serviceTicket, authentication);
                     val addedTicket = Objects.requireNonNull(configurationContext.getTicketRegistry().addTicket(proxyGrantingTicket));
-                    LOGGER.debug("Generated proxy granting ticket [{}] based off of [{}]", proxyGrantingTicket, serviceTicketId);
+                    LOGGER.debug("Generated proxy granting ticket [{}] based off of [{}]", proxyGrantingTicket, serviceTicket.getId());
                     if (!serviceTicket.isStateless()) {
                         configurationContext.getTicketRegistry()
                             .updateTicket(Objects.requireNonNull(serviceTicket.getTicketGrantingTicket()));

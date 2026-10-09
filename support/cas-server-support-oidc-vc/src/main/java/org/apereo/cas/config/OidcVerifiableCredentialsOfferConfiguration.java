@@ -3,7 +3,6 @@ package org.apereo.cas.config;
 import module java.base;
 import org.apereo.cas.configuration.CasConfigurationProperties;
 import org.apereo.cas.oidc.OidcConfigurationContext;
-import org.apereo.cas.oidc.vc.issuer.nonce.OidcVerifiableCredentialNonceService;
 import org.apereo.cas.oidc.vc.offer.OidcVerifiableCredentialDefaultOfferService;
 import org.apereo.cas.oidc.vc.offer.OidcVerifiableCredentialDefaultTransactionService;
 import org.apereo.cas.oidc.vc.offer.OidcVerifiableCredentialOfferService;
@@ -16,6 +15,7 @@ import org.apereo.cas.support.oauth.validator.token.OAuth20TokenRequestValidator
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
 import org.apereo.cas.support.oauth.web.response.accesstoken.ext.AccessTokenGrantRequestExtractor;
 import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20AccessTokenResponseCustomizer;
+import org.apereo.cas.ticket.registry.TicketRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -36,7 +36,7 @@ import org.springframework.context.annotation.ScopedProxyMode;
 class OidcVerifiableCredentialsOfferConfiguration {
 
     @Bean
-    @RefreshScope
+    @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = OidcVerifiableCredentialTransactionService.BEAN_NAME)
     public OidcVerifiableCredentialTransactionService oidcVerifiableCredentialTransactionService(
         @Qualifier(OidcConfigurationContext.BEAN_NAME)
@@ -45,7 +45,7 @@ class OidcVerifiableCredentialsOfferConfiguration {
     }
 
     @Bean
-    @RefreshScope
+    @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = OidcVerifiableCredentialOfferService.BEAN_NAME)
     public OidcVerifiableCredentialOfferService oidcVerifiableCredentialCredentialOfferService(
         @Qualifier(OidcVerifiableCredentialTransactionService.BEAN_NAME)
@@ -95,8 +95,8 @@ class OidcVerifiableCredentialsOfferConfiguration {
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = "oidcVerifiableCredentialAccessTokenResponseCustomizer")
     public OAuth20AccessTokenResponseCustomizer oidcVerifiableCredentialAccessTokenResponseCustomizer(
-        @Qualifier(OidcVerifiableCredentialNonceService.BEAN_NAME)
-        final OidcVerifiableCredentialNonceService oidcVerifiableCredentialNonceService) {
-        return new OidcVerifiableCredentialAccessTokenResponseCustomizer(oidcVerifiableCredentialNonceService);
+        @Qualifier(TicketRegistry.BEAN_NAME)
+        final ObjectProvider<TicketRegistry> ticketRegistry) {
+        return new OidcVerifiableCredentialAccessTokenResponseCustomizer(ticketRegistry);
     }
 }

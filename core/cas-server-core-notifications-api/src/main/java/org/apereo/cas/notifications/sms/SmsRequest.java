@@ -5,8 +5,8 @@ import org.apereo.cas.authentication.principal.Principal;
 import org.apereo.cas.util.CollectionUtils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.SuperBuilder;
 import lombok.With;
-import lombok.experimental.SuperBuilder;
 import lombok.val;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -35,7 +35,7 @@ public class SmsRequest {
     private final String tenant;
     
     /**
-     * Has attribute value for the principal?
+     * Determines whether the principal has an attribute value.
      *
      * @return true/false
      */

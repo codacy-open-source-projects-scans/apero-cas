@@ -1,0 +1,17 @@
+# walt.id Wallet API v2. The original Wallet API implements OpenID4VCI/OpenID4VP drafts only;
+# v2 implements the finalized 1.0 specifications, which is what CAS issues and verifies.
+# Authentication is off and persistence is SQLite in the shipped configuration, so the wallet
+# needs no database, no front end and no account bootstrap.
+#
+# Readiness is polled by run-waltid-server.sh rather than by a container health check, so that
+# a failure to start shows up as the wallet's own logs instead of an opaque unhealthy status.
+services:
+  wallet-api2:
+    image: waltid/wallet-api2:1.1.1
+    container_name: waltid-wallet-api2
+    restart: unless-stopped
+    ports:
+      - "7006:7006"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "localhost:host-gateway"

@@ -7,6 +7,7 @@ import org.apereo.cas.jpa.JpaConfigurationContext;
 import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.spring.SpringExpressionLanguageValueResolver;
+import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,62 @@ import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 public class JpaBeans {
 
     /**
+     * Gets data source config.
+     *
+     * @param ds the ds
+     * @return the data source config
+     */
+    public Map<String, String> getDataSourceConfig(final DataSource ds) {
+        if (ds instanceof final SimpleDriverDataSource sds) {
+            return Map.of(
+                "url", Objects.requireNonNull(sds.getUrl()),
+                "username", Objects.requireNonNull(sds.getUsername()),
+                "driverClass", Objects.requireNonNull(sds.getDriver()).getClass().getName()
+            );
+        }
+        if (ds instanceof CloseableDataSource cds
+            && cds.getTargetDataSource() instanceof final HikariConfig cfg) {
+            val map = new LinkedHashMap<String, String>();
+            map.put("url", cfg.getJdbcUrl());
+            map.put("username", cfg.getUsername());
+            map.put("driverClass", cfg.getDriverClassName());
+            map.put("poolName", cfg.getPoolName());
+            map.put("minimumIdle", String.valueOf(cfg.getMinimumIdle()));
+            map.put("maximumPoolSize", String.valueOf(cfg.getMaximumPoolSize()));
+            map.put("maxLifetime", String.valueOf(cfg.getMaxLifetime()));
+            map.put("connectionTimeout", String.valueOf(cfg.getConnectionTimeout()));
+            map.put("idleTimeout", String.valueOf(cfg.getIdleTimeout()));
+            map.put("leakDetectionThreshold", String.valueOf(cfg.getLeakDetectionThreshold()));
+            map.put("validationTimeout", String.valueOf(cfg.getValidationTimeout()));
+            map.put("initializationFailTimeout", String.valueOf(cfg.getInitializationFailTimeout()));
+            return map;
+        }
+        return Map.of();
+    }
+
+    /**
+     * New Hikari connection pool with Hikari's defaults, except that no idle connections are kept:
+     * connections are opened on demand and retire after the default idle timeout, so a rarely
+     * used pool holds nothing. The pool starts on the first connection request.
+     *
+     * @param driverClass the driver class
+     * @param username    the username
+     * @param password    the password
+     * @param url         the url
+     * @return the data source
+     */
+    public CloseableDataSource newPoolingDataSource(final String driverClass, final String username,
+                                                    final String password, final String url) {
+        val bean = new HikariDataSource();
+        FunctionUtils.doIfNotBlank(driverClass, _ -> bean.setDriverClassName(driverClass));
+        bean.setJdbcUrl(url);
+        bean.setUsername(username);
+        bean.setPassword(password);
+        bean.setMinimumIdle(0);
+        return new DefaultCloseableDataSource(bean);
+    }
+    
+    /**
      * New simple data source.
      *
      * @param driverClass the driver class
@@ -48,7 +105,7 @@ public class JpaBeans {
             return ds;
         });
     }
-
+    
     /**
      * Get new data source, from JNDI lookup or created via direct configuration
      * of Hikari pool.
@@ -114,7 +171,7 @@ public class JpaBeans {
         val dataSourceProperties = new Properties();
         dataSourceProperties.putAll(jpaProperties.getProperties());
         bean.setDataSourceProperties(dataSourceProperties);
-        
+
         return new DefaultCloseableDataSource(bean);
     }
 

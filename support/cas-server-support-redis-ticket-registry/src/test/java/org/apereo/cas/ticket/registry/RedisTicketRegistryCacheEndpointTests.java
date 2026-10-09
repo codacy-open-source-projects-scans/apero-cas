@@ -16,9 +16,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
+import static org.awaitility.Awaitility.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
  * This is {@link RedisTicketRegistryCacheEndpointTests}.
@@ -30,7 +34,9 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("Redis")
 @TestPropertySource(properties = {
     "management.endpoint.redisTicketsCache.access=UNRESTRICTED",
-    "cas.ticket.registry.core.enable-locking=false"
+    "cas.ticket.registry.core.enable-locking=false",
+    "cas.ticket.registry.redis.crypto.encryption.key=BXRiSBWJcRksTizjdaCoLw",
+    "cas.ticket.registry.redis.crypto.signing.key=cAPyoHMrOMWrwydOXzBA-ufZQM-TilnLjbRgMQWlUlwFmy07bOtAgCIdNBma3c5P4ae_JV6n1OpOAYqSh2NkmQ"
 })
 @Tag("ActuatorEndpoint")
 @ImportAutoConfiguration({
@@ -38,10 +44,6 @@ import static org.junit.jupiter.api.Assertions.*;
     CasRedisTicketRegistryAutoConfiguration.class
 })
 class RedisTicketRegistryCacheEndpointTests extends AbstractCasEndpointTests {
-    @Autowired
-    @Qualifier("redisTicketRegistryCacheEndpoint")
-    private RedisTicketRegistryCacheEndpoint endpoint;
-
     @Autowired
     @Qualifier(TicketRegistry.BEAN_NAME)
     private TicketRegistry ticketRegistry;
@@ -53,23 +55,31 @@ class RedisTicketRegistryCacheEndpointTests extends AbstractCasEndpointTests {
         val ticket = new TicketGrantingTicketImpl(generator.getNewTicketId(TicketGrantingTicket.PREFIX),
             originalAuthn, NeverExpiresExpirationPolicy.INSTANCE);
         ticketRegistry.addTicket(ticket);
-        var results = endpoint.fetchTicket(ticket.getId());
-        assertTrue(results.getStatusCode().is2xxSuccessful());
-        assertNotNull(ticketRegistry.getTicket(ticket.getId()));
+        await().untilAsserted(() -> {
+            assertNotNull(ticketRegistry.getTicket(ticket.getId()));
+            mockMvc.perform(get("/actuator/redisTicketsCache/{ticketId}", ticket.getId())
+                    .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+        });
 
-        endpoint.invalidateTicket(ticket.getId());
-        results = endpoint.fetchTicket(ticket.getId());
-        assertTrue(results.getStatusCode().isSameCodeAs(HttpStatus.NOT_FOUND));
+        mockMvc.perform(delete("/actuator/redisTicketsCache/{ticketId}", ticket.getId())
+                .with(csrf())
+                .accept(MediaType.APPLICATION_JSON))
+            .andExpect(status().isOk());
+        mockMvc.perform(get("/actuator/redisTicketsCache/{ticketId}", ticket.getId())
+                .accept(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNotFound());
     }
 
     @Test
-    void verifyUnknownTicket() {
+    void verifyUnknownTicket() throws Throwable {
         val originalAuthn = CoreAuthenticationTestUtils.getAuthentication();
         val generator = new TicketGrantingTicketIdGenerator(10, "redis");
         val ticket = new TicketGrantingTicketImpl(generator.getNewTicketId(TicketGrantingTicket.PREFIX),
             originalAuthn, NeverExpiresExpirationPolicy.INSTANCE);
-        val results = endpoint.fetchTicket(ticket.getId());
-        assertTrue(results.getStatusCode().isSameCodeAs(HttpStatus.NOT_FOUND));
+        mockMvc.perform(get("/actuator/redisTicketsCache/{ticketId}", ticket.getId())
+                .accept(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNotFound());
     }
     
     

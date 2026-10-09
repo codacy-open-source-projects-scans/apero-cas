@@ -1,4 +1,6 @@
-description = "Apereo CAS Server OAuth Provider Core APIs"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Defines shared OAuth provider contracts used by CAS OAuth features."
 dependencies {
     implementation libraries.pac4jcore
     implementation libraries.nimbus
@@ -27,6 +29,8 @@ dependencies {
     implementation project(":support:cas-server-support-oauth-api")
     implementation project(":support:cas-server-support-oauth-services")
 
+    compileOnly project(":support:cas-server-support-stateless-ticket-registry-api")
+    
     testImplementation project(":core:cas-server-core-audit")
     testImplementation project(":core:cas-server-core-util")
     testImplementation project(":core:cas-server-core-scripting")

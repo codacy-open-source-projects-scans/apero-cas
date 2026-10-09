@@ -11,6 +11,8 @@ import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.jspecify.annotations.Nullable;
@@ -56,6 +58,8 @@ public class DefaultAuthenticationBuilder implements AuthenticationBuilder {
      * Authenticated principal.
      */
     @Nullable
+    @Setter
+    @Accessors(chain = true)
     private Principal principal;
 
     /**
@@ -133,18 +137,12 @@ public class DefaultAuthenticationBuilder implements AuthenticationBuilder {
             .service(service)
             .principal(principal)
             .registeredService(registeredService)
+            .releasingAttributes(principalAttributes)
             .applicationContext(applicationContext)
             .build();
         val principalId = registeredService.getUsernameAttributeProvider().resolveUsername(usernameContext);
         val newPrincipal = principalFactory.createPrincipal(principalId, principalAttributes);
         return DefaultAuthenticationBuilder.newInstance(authentication).setPrincipal(newPrincipal);
-    }
-
-    @Override
-    @CanIgnoreReturnValue
-    public AuthenticationBuilder setPrincipal(@Nullable final Principal p) {
-        this.principal = p;
-        return this;
     }
 
     @Override

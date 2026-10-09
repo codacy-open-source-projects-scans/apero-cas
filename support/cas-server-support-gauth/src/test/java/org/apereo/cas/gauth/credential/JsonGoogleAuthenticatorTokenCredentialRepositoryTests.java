@@ -14,8 +14,6 @@ import org.apache.commons.io.FileUtils;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.parallel.ResourceAccessMode;
-import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -41,7 +39,6 @@ import static org.mockito.Mockito.*;
 @Getter
 @Tag("MFAProvider")
 @ExtendWith(CasTestExtension.class)
-@ResourceLock(value = "registry", mode = ResourceAccessMode.READ_WRITE)
 class JsonGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTimeTokenCredentialRepositoryTests {
 
     @Autowired
@@ -63,6 +60,7 @@ class JsonGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTimeT
         assertNull(repo.update(OneTimeTokenAccount.builder().build()));
         assertEquals(0, repo.count());
         assertDoesNotThrow(() -> repo.delete("casuser"));
+        when(resource.exists()).thenReturn(true);
         when(resource.getFile()).thenReturn(Files.createTempFile("test", ".json").toFile());
         assertTrue(repo.get("casuser").isEmpty());
     }
@@ -90,6 +88,32 @@ class JsonGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneTimeT
         assertEquals(1, repo.count());
         repo.delete(account.getUsername());
         assertTrue(repo.load().isEmpty());
+        try (val leftovers = Files.list(file.toPath().getParent())) {
+            assertTrue(leftovers.noneMatch(path -> path.getFileName().toString().startsWith(file.getName()) && path.toString().endsWith(".tmp")));
+        }
+    }
+
+    @Test
+    void verifyCountsDevicesAndReplacesOnSave() throws Throwable {
+        val file = Files.createTempFile("account", ".json").toFile();
+        val repo = buildRepositoryInstance(new FileSystemResource(file));
+        val first = repo.create("casuser");
+        repo.save(first);
+        repo.save(repo.create("casuser"));
+        repo.save(repo.create(UUID.randomUUID().toString()));
+        assertEquals(3, repo.count());
+        repo.save(first);
+        assertEquals(2, repo.count("casuser"));
+        assertEquals(3, repo.count());
+        assertEquals(3, repo.load().size());
+    }
+
+    @Test
+    void verifyUnreadableFileFailsClosed() throws Throwable {
+        val file = Files.createTempFile("account", ".json").toFile();
+        FileUtils.writeStringToFile(file, "{ not json", StandardCharsets.UTF_8);
+        val repo = buildRepositoryInstance(new FileSystemResource(file));
+        assertThrows(RuntimeException.class, () -> repo.get("casuser"));
     }
 
     @Test

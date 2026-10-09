@@ -1,12 +1,12 @@
 package org.apereo.cas.heimdall.engine;
 
 import module java.base;
+import org.apereo.cas.heimdall.AuthorizationDecisionReason;
 import org.apereo.cas.heimdall.AuthorizationRequest;
 import org.apereo.cas.heimdall.AuthorizationResponse;
 import org.apereo.cas.heimdall.authorizer.ResourceAuthorizer;
 import org.apereo.cas.heimdall.authorizer.repository.AuthorizableResourceRepository;
 import org.apereo.cas.heimdall.authorizer.resource.AuthorizableResource;
-import io.micrometer.common.util.StringUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
 
@@ -23,16 +23,23 @@ public class DefaultAuthorizationEngine implements AuthorizationEngine {
 
     @Override
     public AuthorizationResponse authorize(final AuthorizationRequest request) {
+        if (request.getPrincipal() == null) {
+            return AuthorizationResponse.unauthorized("No authorization principal could be resolved")
+                .setReason(AuthorizationDecisionReason.SUBJECT_UNRESOLVED);
+        }
         val resources = findResources(request);
         if (resources.isEmpty()) {
-            return AuthorizationResponse.notFound("No authorizable resource can be found");
+            return AuthorizationResponse.notFound("No authorizable resource can be found")
+                .setReason(AuthorizationDecisionReason.NO_MATCHING_RESOURCE);
         }
 
         for (val resource : resources) {
             for (val authorizer : authorizers) {
                 val result = authorizer.evaluate(request, resource);
                 if (!result.authorized()) {
-                    return AuthorizationResponse.unauthorized(result.reason());
+                    return AuthorizationResponse.unauthorized(result.reason()).setReason(resource.getPolicies().isEmpty()
+                        ? AuthorizationDecisionReason.NO_POLICIES
+                        : AuthorizationDecisionReason.POLICY_DENIED);
                 }
             }
         }
@@ -40,10 +47,9 @@ public class DefaultAuthorizationEngine implements AuthorizationEngine {
     }
 
     private List<AuthorizableResource> findResources(final AuthorizationRequest request) {
-        if (StringUtils.isBlank(request.getNamespace())) {
-            return repository.find(request.getResource().getId());
+        if (request.isAuthZen()) {
+            return repository.find(request.getResource(), request.getAction());
         }
-        val resource = repository.find(request);
-        return resource.map(List::of).orElseGet(List::of);
+        return repository.find(request).map(List::of).orElseGet(List::of);
     }
 }

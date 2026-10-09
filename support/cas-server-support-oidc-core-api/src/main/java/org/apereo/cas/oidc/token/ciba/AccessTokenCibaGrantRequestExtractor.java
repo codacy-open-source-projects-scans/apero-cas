@@ -18,7 +18,6 @@ import org.apereo.cas.support.oauth.web.response.accesstoken.ext.BaseAccessToken
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
-import org.jspecify.annotations.NonNull;
 import org.pac4j.core.context.WebContext;
 import org.pac4j.core.profile.ProfileManager;
 import org.springframework.beans.factory.ObjectProvider;
@@ -31,7 +30,7 @@ import org.springframework.beans.factory.ObjectProvider;
  */
 @Slf4j
 public class AccessTokenCibaGrantRequestExtractor extends BaseAccessTokenGrantRequestExtractor<OidcConfigurationContext> {
-    public AccessTokenCibaGrantRequestExtractor(final ObjectProvider<@NonNull OidcConfigurationContext> configurationContext) {
+    public AccessTokenCibaGrantRequestExtractor(final ObjectProvider<OidcConfigurationContext> configurationContext) {
         super(configurationContext);
     }
 
@@ -54,6 +53,9 @@ public class AccessTokenCibaGrantRequestExtractor extends BaseAccessTokenGrantRe
         val cibaFactory = (OidcCibaRequestFactory) configurationContext.getTicketFactory().get(OidcCibaRequest.class);
         val decodedId = cibaFactory.decodeId(authRequestId);
         val cibaRequest = configurationContext.getTicketRegistry().getTicket(decodedId, OidcCibaRequest.class);
+        if (cibaRequest == null || !Objects.equals(cibaRequest.getClientId(), clientId)) {
+            throw new InvalidCibaRequestException("CIBA request does not belong to the authenticated client");
+        }
 
         val audit = AuditableContext.builder()
             .service(service)
@@ -85,6 +87,7 @@ public class AccessTokenCibaGrantRequestExtractor extends BaseAccessTokenGrantRe
             .scopes(cibaRequest.getScopes())
             .userProfile(profile)
             .clientId(registeredService.getClientId())
+            .cibaRequestId(authRequestId)
             .generateRefreshToken(registeredService.isGenerateRefreshToken())
             .build();
 

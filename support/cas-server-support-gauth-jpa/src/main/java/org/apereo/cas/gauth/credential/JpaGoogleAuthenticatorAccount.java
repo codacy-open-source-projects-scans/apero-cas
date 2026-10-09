@@ -5,7 +5,7 @@ import org.apereo.cas.authentication.OneTimeTokenAccount;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import lombok.experimental.SuperBuilder;
+import lombok.SuperBuilder;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -61,6 +61,8 @@ public class JpaGoogleAuthenticatorAccount extends GoogleAuthenticatorAccount {
             .registrationDate(acct.getRegistrationDate())
             .name(acct.getName())
             .source(acct.getSource())
+            .tenant(acct.getTenant())
+            .lastUsedDateTime(acct.getLastUsedDateTime())
             .build();
     }
 }

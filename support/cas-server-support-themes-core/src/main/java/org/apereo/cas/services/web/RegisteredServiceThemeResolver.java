@@ -51,7 +51,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * If the theme attribute in the service is not a file or URL resource, it will be evaluated as
  * a Spring expression and then a search for property files with the theme name as the base name
  * is done using configured template prefix locations.
- * If nothing is found in template prefix locations, the {@link java.util.ResourceBundle#getBundle(String, Locale)} method
+ * If nothing is found in template prefix locations, the {@link ResourceBundle#getBundle(String, Locale)} method
  * using the locale of the request is used to look for the theme properties to ensure it exists.
  * If theme properties don't exist for the specified theme name then the default theme will be used.
  *
@@ -61,15 +61,21 @@ import jakarta.servlet.http.HttpServletRequest;
 @Slf4j
 @RequiredArgsConstructor
 public class RegisteredServiceThemeResolver extends AbstractThemeResolver {
-    protected final ObjectProvider<@NonNull ServicesManager> servicesManager;
+    protected final ObjectProvider<ServicesManager> servicesManager;
 
-    protected final ObjectProvider<@NonNull AuthenticationServiceSelectionPlan> authenticationRequestServiceSelectionStrategies;
+    protected final ObjectProvider<AuthenticationServiceSelectionPlan> authenticationRequestServiceSelectionStrategies;
 
-    protected final ObjectProvider<@NonNull CasConfigurationProperties> casProperties;
+    protected final ObjectProvider<CasConfigurationProperties> casProperties;
 
     @NonNull
     @Override
     public String resolveThemeName(final HttpServletRequest request) {
+        val rememberedTheme = request.getAttribute(casProperties.getObject().getTheme().getParamName());
+        if (rememberedTheme instanceof final String themeName && StringUtils.isNotBlank(themeName)) {
+            LOGGER.trace("Theme [{}] was already resolved for this request", themeName);
+            return themeName;
+        }
+
         val context = RequestContextHolder.getRequestContext();
         val serviceContext = WebUtils.getService(context);
         val service = FunctionUtils.doUnchecked(() -> authenticationRequestServiceSelectionStrategies.getObject().resolveService(serviceContext));
@@ -80,7 +86,7 @@ public class RegisteredServiceThemeResolver extends AbstractThemeResolver {
 
         val registeredService = (WebBasedRegisteredService) servicesManager.getObject().findServiceBy(service);
         if (registeredService == null || !registeredService.getAccessStrategy().isServiceAccessAllowed(registeredService, service)) {
-            LOGGER.warn("No registered service is found to match [{}] or access is denied. Using default theme [{}]", service, getDefaultThemeName());
+            LOGGER.warn("No registered service is found to match [{}] or access is denied. Using default theme [{}]", service.getId(), getDefaultThemeName());
             return rememberThemeName(request);
         }
         if (StringUtils.isBlank(registeredService.getTheme())) {

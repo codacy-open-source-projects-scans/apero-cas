@@ -7,7 +7,6 @@ import org.apereo.cas.web.AbstractController;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -29,11 +28,11 @@ public class UmaWellKnownEndpointController extends AbstractController {
      *
      * @return the well known discovery configuration
      */
-    @GetMapping(value = '/' + OAuth20Constants.BASE_OAUTH20_URL + "/.well-known/uma-configuration", produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = OAuth20Constants.BASE_OAUTH20_URL + "/.well-known/uma-configuration", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
         summary = "Get UMA discovery configuration",
         description = "Returns the UMA discovery configuration")
-    public ResponseEntity<@NonNull UmaServerDiscoverySettings> getWellKnownDiscoveryConfiguration() {
+    public ResponseEntity<UmaServerDiscoverySettings> getWellKnownDiscoveryConfiguration() {
         return new ResponseEntity(this.discovery, HttpStatus.OK);
     }
 }

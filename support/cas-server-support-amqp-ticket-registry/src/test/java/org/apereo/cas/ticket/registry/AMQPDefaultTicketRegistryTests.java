@@ -2,20 +2,29 @@ package org.apereo.cas.ticket.registry;
 
 import module java.base;
 import org.apereo.cas.config.CasAMQPTicketRegistryAutoConfiguration;
+import org.apereo.cas.configuration.CasConfigurationProperties;
+import org.apereo.cas.ha.ClusterTopologyManager;
 import org.apereo.cas.util.crypto.CipherExecutor;
 import org.apereo.cas.util.junit.EnabledIfListeningOnPort;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.instrument.MockClock;
 import lombok.Getter;
+import lombok.val;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
+import org.springframework.amqp.core.MessageListenerContainer;
+import org.springframework.amqp.rabbitmq.client.AmqpConnectionFactory;
+import org.springframework.amqp.rabbitmq.client.RabbitAmqpTemplate;
+import org.springframework.amqp.rabbitmq.client.listener.RabbitAmqpListenerContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.amqp.autoconfigure.RabbitAutoConfiguration;
+import org.springframework.boot.amqp.rabbitmq.autoconfigure.AmqpRabbitAutoConfiguration;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * This is {@link AMQPDefaultTicketRegistryTests}.
@@ -25,20 +34,23 @@ import org.springframework.test.context.TestPropertySource;
  */
 @Import(AMQPDefaultTicketRegistryTests.AMQPTicketRegistryTestConfiguration.class)
 @ImportAutoConfiguration({
-    RabbitAutoConfiguration.class,
+    AmqpRabbitAutoConfiguration.class,
     CasAMQPTicketRegistryAutoConfiguration.class
 })
 @TestPropertySource(properties = {
     "cas.ticket.registry.in-memory.crypto.signing.key=HbuPoSycjr0Pyv2u8WSwKcM6Ow0lviUdT7b9VzwxkcANqbDyKOb6KHPus_fCDCXElPhzXpeP-T0bryadZNiwOQ",
     "cas.ticket.registry.in-memory.crypto.encryption.key=BXRiSBWJcRksTizjdaCoLw",
 
-    "spring.rabbitmq.host=localhost",
-    "spring.rabbitmq.port=5672",
-    "spring.rabbitmq.username=rabbituser",
-    "spring.rabbitmq.password=bugsbunny"
+    "cas.ticket.registry.in-memory.properties.spring.amqp.rabbitmq.management-url=http://localhost:25672",
+
+    "spring.amqp.rabbitmq.host=localhost",
+    "spring.amqp.rabbitmq.port=5672",
+    "spring.amqp.rabbitmq.username=rabbituser",
+    "spring.amqp.rabbitmq.password=bugsbunny"
 })
 @EnabledIfListeningOnPort(port = 5672)
 @Tag("AMQP")
+@Tag("SkipClearingTicketRegistry")
 @Getter
 class AMQPDefaultTicketRegistryTests extends BaseTicketRegistryTests {
     @Autowired
@@ -49,6 +61,39 @@ class AMQPDefaultTicketRegistryTests extends BaseTicketRegistryTests {
     @Qualifier(CipherExecutor.BEAN_NAME_TICKET_REGISTRY_CIPHER_EXECUTOR)
     private CipherExecutor messageQueueCipherExecutor;
 
+    @Autowired
+    private CasConfigurationProperties casProperties;
+    
+    @Autowired
+    @Qualifier("amqpTicketRegistryClusterTopologyManager")
+    private ClusterTopologyManager amqpTicketRegistryClusterTopologyManager;
+
+    @Autowired
+    @Qualifier("amqpRabbitConnectionFactory")
+    private AmqpConnectionFactory amqpRabbitConnectionFactory;
+
+    @Autowired
+    @Qualifier("rabbitAmqpTemplate")
+    private RabbitAmqpTemplate rabbitAmqpTemplate;
+
+    @Autowired
+    @Qualifier("amqpTicketRegistryMessageListenerContainer")
+    private MessageListenerContainer amqpTicketRegistryMessageListenerContainer;
+
+    @RepeatedTest(1)
+    void verifyAmqpInfrastructure() {
+        assertNotNull(amqpRabbitConnectionFactory);
+        assertNotNull(rabbitAmqpTemplate);
+        assertInstanceOf(RabbitAmqpListenerContainer.class, amqpTicketRegistryMessageListenerContainer);
+    }
+
+    @RepeatedTest(1)
+    void verifyOperation() throws Exception {
+        val results = amqpTicketRegistryClusterTopologyManager.discoverMembers();
+        assertFalse(results.isEmpty());
+    }
+
+    
     @Override
     protected CipherExecutor setupCipherExecutor() {
         return this.messageQueueCipherExecutor;

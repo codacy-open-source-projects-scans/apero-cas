@@ -40,10 +40,11 @@ public class CasAcceptableUsagePolicyLdapAutoConfiguration {
         return BeanSupplier.of(AcceptableUsagePolicyRepository.class)
             .when(AcceptableUsagePolicyRepository.CONDITION_AUP_ENABLED.given(applicationContext.getEnvironment()))
             .supply(() -> {
-                val connectionFactoryList = new ConcurrentHashMap<String, ConnectionFactory>();
                 val aupProperties = casProperties.getAcceptableUsagePolicy();
-                aupProperties.getLdap().forEach(ldap -> connectionFactoryList.put(ldap.getLdapUrl(), LdapUtils.newLdaptiveConnectionFactory(ldap)));
-                return new LdapAcceptableUsagePolicyRepository(ticketRegistrySupport, aupProperties, connectionFactoryList);
+                val connectionFactoryList = new LinkedHashMap<String, ConnectionFactory>();
+                aupProperties.getLdap().forEach(ldap -> connectionFactoryList.computeIfAbsent(
+                    ldap.toStableIdentifier(), _ -> LdapUtils.newLdaptiveConnectionFactory(ldap)));
+                return new LdapAcceptableUsagePolicyRepository(aupProperties, connectionFactoryList);
             })
             .otherwise(AcceptableUsagePolicyRepository::noOp)
             .get();

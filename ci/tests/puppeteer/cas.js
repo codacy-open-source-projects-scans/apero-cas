@@ -14,14 +14,14 @@ const {Buffer} = require("buffer");
 const ps = require("ps-node");
 const NodeStaticAuth = require("node-static-auth");
 const operativeSystemModule = require("os");
-const figlet = require("figlet");
+const CFonts = require("cfonts");
 const CryptoJS = require("crypto-js");
 const jose = require("jose");
 const pino = require("pino");
 const xml2js = require("xml2js");
 const {Docker} = require("node-docker-api");
 const docker = new Docker({socketPath: "/var/run/docker.sock"});
-const archiver = require("archiver");
+const {ZipArchive} = require("archiver");
 const unzipper = require("unzipper");
 const puppeteer = require("puppeteer");
 const speakeasy = require("speakeasy");
@@ -74,7 +74,11 @@ const BROWSER_OPTIONS = {
         "--window-size=1920,1080",
         "--disable-features=BlockInsecurePrivateNetworkRequests",
         "--disable-features=PrivateNetworkAccessPreflight",
-        "--allow-insecure-localhost"
+        "--allow-insecure-localhost",
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-session-crashed-bubble',
+        '--disable-features=Translate,BackForwardCache'
     ]
 };
 
@@ -104,6 +108,7 @@ exports.refreshPage = async (page, url = "https://localhost:8443/cas/login") => 
 };
 
 exports.newBrowser = async (options) => {
+    await CHROMIUM_PREPARED;
     let retry = 0;
     const maxRetries = 5;
     while (retry < maxRetries) {
@@ -126,6 +131,12 @@ exports.newBrowser = async (options) => {
 exports.closeBrowser = async (browser, preClose = () => {}, postClose = () => {}) => {
     try {
         preClose(browser);
+        const pages = await browser.pages();
+        await Promise.all(
+            pages
+                .filter(page => !page.isClosed())
+                .map(page => page.close())
+        );
         await browser.close();
     } finally {
         postClose(browser);
@@ -134,29 +145,33 @@ exports.closeBrowser = async (browser, preClose = () => {}, postClose = () => {}
 
 exports.log = async (text, ...args) => {
     const toLog = inspect(text);
-    await LOGGER.debug(`🔷 ${colors.blue(toLog)}`, args);
+    LOGGER.debug(`🔷 ${colors.blue(toLog)}`, args);
 };
 
-exports.separator = async () => console.log("*".repeat(100));
+exports.separator = async (count = 1) => {
+    for (let i = 0; i < count; i++) {
+        console.log("*".repeat(100));
+    }
+}
 
 exports.logy = async (text) => {
     const toLog = inspect(text);
-    await LOGGER.warn(`⚠️ ${colors.yellow(toLog)}`);
+    LOGGER.warn(`⚠️ ${colors.yellow(toLog)}`);
 };
 
 exports.logb = async (text) => {
     const toLog = inspect(text);
-    await LOGGER.debug(`🔷 ${colors.blue(toLog)}`);
+    LOGGER.debug(`🔷 ${colors.blue(toLog)}`);
 };
 
 exports.logg = async (text) => {
     const toLog = inspect(text);
-    await LOGGER.info(`🍀 ${colors.green(toLog)}`);
+    LOGGER.info(`🍀 ${colors.green(toLog)}`);
 };
 
 exports.logr = async (text) => {
     const toLog = inspect(text);
-    await LOGGER.error(`📛 ${colors.red(toLog)}`);
+    LOGGER.error(`📛 ${colors.red(toLog)}`);
 };
 
 exports.logPage = async (page) => {
@@ -168,7 +183,7 @@ exports.logPage = async (page) => {
 exports.removeDirectoryOrFile = async (directory) => {
     this.logg(`Removing directory ${directory}`);
     if (fs.existsSync(directory)) {
-        await fs.rmSync(directory, {recursive: true});
+        fs.rmSync(directory, {recursive: true});
     }
     await this.logg(`Removed directory ${directory}`);
     if (fs.existsSync(directory)) {
@@ -186,11 +201,15 @@ exports.click = async (page, button) =>
     }, button);
 
 exports.asciiart = (text) => {
-    const art = figlet.textSync(text, {
-        font: "Small",
-        horizontalLayout: "fitted"
+    CFonts.say(text, {
+        font: "chrome",
+        colors: ["blue", "blueBright", "yellowBright"],
+        background: "transparent",
+        align: "left",
+        letterSpacing: 0,
+        lineHeight: .5,
+        space: false
     });
-    console.log(colors.blue(art));
     console.log(`🔷 Puppeteer: ${colors.blue(require("puppeteer/package.json").version)}`);
 };
 
@@ -226,6 +245,17 @@ exports.elementValue = async (page, selector, valueToSet = undefined) => {
         await this.log(`Value for selector [${selector}] is: [${text}]`);
     }
     return text;
+};
+
+exports.clearValue = async(page, selector) => {
+    await page.locator(selector).fill("");
+}
+
+exports.selectValue = async(page, selector) => {
+    await page.$eval(selector, input => {
+        input.focus();
+        input.select();
+    });
 };
 
 exports.innerTexts = async (page, selector) =>
@@ -347,6 +377,7 @@ exports.containsCookie = async (page, cookieName = "TGC") => {
 };
 
 exports.assertCookie = async (page, cookieMustBePresent = true, cookieName = "TGC") => {
+    const url = await page.url()
     const cookies = (await page.cookies()).filter((c) => {
         this.log(`Checking cookie ${c.name}:${c.value}`);
         return c.name === cookieName;
@@ -354,7 +385,7 @@ exports.assertCookie = async (page, cookieMustBePresent = true, cookieName = "TG
     await this.log(`Found ${cookies.length} cookie(s)`);
     if (cookieMustBePresent) {
         await this.log(`Checking for cookie ${cookieName}, which MUST be present`);
-        assert(cookies.length !== 0, `Cookie ${cookieName} must be present`);
+        assert(cookies.length !== 0, `Cookie ${cookieName} must be present on ${url}`);
         await this.logg("Asserting cookies:");
         await this.logg(`${JSON.stringify(cookies, undefined, 2)}`);
         return cookies[0];
@@ -363,9 +394,18 @@ exports.assertCookie = async (page, cookieMustBePresent = true, cookieName = "TG
     if (cookies.length === 0) {
         await this.logg(`Correct! Cookie ${cookieName} cannot be found`);
     } else {
-        await this.logr(`Incorrect! Cookie ${cookieName} can be found but it must not be present`);
+        await this.logr(`Incorrect! Cookie ${cookieName} can be found but it must not be present on ${url}`);
         const ck = cookies[0];
-        const msg = `Found cookie => name: ${ck.name},value:${ck.value},path:${ck.path},domain:${ck.domain},httpOnly:${ck.httpOnly},secure:${ck.secure}`;
+        const msg = `
+        Page: ${url},
+        Found cookie => 
+            name: ${ck.name},
+            value:${ck.value},
+            path:${ck.path},
+            domain:${ck.domain},
+            httpOnly:${ck.httpOnly},
+            secure:${ck.secure}
+        `;
         await this.logb(msg);
         throw msg;
     }
@@ -408,7 +448,6 @@ exports.submitForm = async (page, selector, predicate = undefined, statusCode = 
 };
 
 exports.pressEnter = async (page) => {
-    this.screenshot(page);
     page.keyboard.press("Enter");
     this.sleep(1000);
 };
@@ -437,6 +476,16 @@ exports.attributeValue = async (page, selector, attribute, expectedValue = undef
     return value;
 };
 
+exports.updateLogLevel = async(payload) => {
+    for (const request of payload) {
+        const body = {
+            configuredLevel: request.level
+        }
+        await this.doRequest(`https://localhost:8443/cas/actuator/loggers/${request.package}`, "POST",
+            {"Content-Type": "application/json"}, 204, JSON.stringify(body, undefined, 2))
+    }
+}
+
 exports.startHar = async (page, harPath = "network.har") => {
     const har = new PuppeteerHar(page);
     await har.start({path: harPath});
@@ -447,16 +496,18 @@ exports.stopHar = async (har) => {
     await har.stop();
 };
 
-exports.newPage = async (browser) => {
+exports.newPage = async (browser, force = false) => {
     let page = undefined;
-    try {
-        page = (await browser.pages())[0];
-    } catch (e) {
-        this.logr(e);
-        await this.sleep(1000);
+    if (!force) {
+        try {
+            page = (await browser.pages())[0];
+        } catch (e) {
+            this.logr(e);
+            await this.sleep(1000);
+        }
     }
 
-    if (page === undefined) {
+    if (page === undefined || force) {
         let counter = 0;
         while (page === undefined && counter < 5) {
             try {
@@ -562,8 +613,8 @@ exports.assertTicketParameter = async (page, found = true) => {
     return null;
 };
 
-exports.validateTicket = async (service, ticket, format = "JSON") => {
-    const body = await this.doRequest(`https://localhost:8443/cas/p3/serviceValidate?service=${service}&ticket=${ticket}&format=${format}`);
+exports.validateTicket = async (service, ticket, format = "JSON", port = 8443) => {
+    const body = await this.doRequest(`https://localhost:${port}/cas/p3/serviceValidate?service=${service}&ticket=${ticket}&format=${format}`);
     await this.log(body);
     if (format === "XML") {
         return body;
@@ -806,6 +857,41 @@ exports.verifyJwt = async (token, secret, options) => {
     return decoded;
 };
 
+exports.createJwk = async (signingAlg = "RS256", encryptionAlg = "RSA-OAEP-256") => {
+    async function createKeyPair(alg, use) {
+        const { publicKey, privateKey } = await jose.generateKeyPair(alg, {
+            extractable: true
+        });
+
+        const publicJwk = await jose.exportJWK(publicKey);
+        publicJwk.use = use;
+        publicJwk.alg = alg;
+        publicJwk.kid = await jose.calculateJwkThumbprint(publicJwk);
+        const privateJwk = await jose.exportJWK(privateKey);
+        privateJwk.use = use;
+        privateJwk.alg = alg;
+        privateJwk.kid = publicJwk.kid;
+        return {
+            publicJwk,
+            privateJwk
+        };
+    }
+
+    const signingKeys = await createKeyPair(signingAlg, "sig");
+    const encryptionKeys = await createKeyPair(encryptionAlg, "enc");
+    const jwks = {
+        keys: [
+            signingKeys.publicJwk,
+            encryptionKeys.publicJwk
+        ]
+    };
+    return {
+        signing: signingKeys,
+        encryption: encryptionKeys,
+        jwks
+    };
+};
+
 exports.verifyJwtWithJwk = async (ticket, keyContent, alg = "RS256") => {
     await this.logg("Using key to verify JWT:");
     await this.log(keyContent);
@@ -989,14 +1075,24 @@ exports.httpServer = async (root,
 exports.randomNumber = async (min = 1, max = 100) =>
     Math.floor(Math.random() * (max - min + 1)) + min;
 
-exports.randomWord = async (length = 12) => {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*[]{};:<>|";
+exports.randomWord = async (length = 12, specialChars = true, numbers = true) => {
+    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    if (numbers) {
+        chars += "0123456789";
+    }
+    if (specialChars) {
+        chars += "!@#$%^&*[]{};:<>|";
+    }
     let result = "";
     for (let i = 0; i < length; i++) {
         const idx = Math.floor(Math.random() * chars.length);
         result += chars.charAt(idx);
     }
     return result;
+};
+
+exports.uuid = async() => {
+    return crypto.randomUUID();
 };
 
 exports.killProcess = async (command, args) =>
@@ -1042,7 +1138,7 @@ exports.extractFromEmail = async (browser) => {
 
 exports.waitForNavigation = async (page) => page.waitForNavigation();
 
-exports.goto = async (page, url, retryCount = 5) => {
+exports.goto = async (page, url, retryCount = 3) => {
     let response = null;
     let attempts = 0;
     const timeout = 2000;
@@ -1052,7 +1148,7 @@ exports.goto = async (page, url, retryCount = 5) => {
         attempts += 1;
         try {
             if (!navigated) {
-                await this.logg(`Navigating to: ${url}`);
+                await this.logg(`Navigating to ${url}`);
                 response = await page.goto(url, {
                     waitUntil: "domcontentloaded"
                 });
@@ -1106,6 +1202,13 @@ exports.gotoLogout = async (page, service = undefined, port = 8443) => {
     const url = `https://localhost:${port}/cas/logout${service === undefined ? "" : `?service=${service}`}`;
     return this.goto(page, url);
 };
+
+exports.keycloakLogout = async(page) => {
+    await this.goto(page, "http://localhost:8988/realms/cas/protocol/openid-connect/logout");
+    await this.click(page, "#kc-logout");
+    await page.waitForNavigation();
+    await this.sleep();
+}
 
 exports.gotoLogoutForTenant = async (page, tenant, service = undefined, port = 8443) => {
     const url = `https://localhost:${port}/cas/tenants/${tenant}/logout${service === undefined ? "" : `?service=${service}`}`;
@@ -1280,13 +1383,13 @@ exports.updateYamlConfigurationSource = async(configDirectory, config) => {
     const configFilePath = path.join(configDirectory, "config.yml");
     const newConfig = await this.toYAML(config);
     await this.log(`Updated configuration:\n${newConfig}`);
-    await fs.writeFileSync(configFilePath, newConfig);
+    fs.writeFileSync(configFilePath, newConfig);
     await this.log(`Wrote changes to ${configFilePath}`);
 };
 
 exports.createZipFile = async (file, callback) => {
     const zip = fs.createWriteStream(file);
-    const archive = archiver("zip", {
+    const archive = new ZipArchive({
         zlib: {level: 9}
     });
     archive.pipe(zip);
@@ -1295,9 +1398,16 @@ exports.createZipFile = async (file, callback) => {
 };
 
 exports.unzipFile = async (file, targetDirectory) =>
-    fs.createReadStream(file)
-        .pipe(unzipper.Extract({path: targetDirectory}))
-        .on("close", () => this.log(`Files unzipped successfully @ ${targetDirectory}`));
+    new Promise((resolve, reject) => {
+        fs.createReadStream(file)
+            .on("error", reject)
+            .pipe(unzipper.Extract({path: targetDirectory}))
+            .on("error", reject)
+            .on("close", async () => {
+                await this.log(`Files unzipped successfully @ ${targetDirectory}`);
+                resolve();
+            });
+    });
 
 exports.prepareChromium = async () => {
     await this.log(`Chromium directory: ${CHROMIUM_USER_DATA_DIR}`);
@@ -1311,4 +1421,5 @@ exports.prepareChromium = async () => {
 };
 
 this.asciiart("Apereo CAS - Puppeteer");
-this.prepareChromium();
+const CHROMIUM_PREPARED = this.prepareChromium();
+CHROMIUM_PREPARED.catch(() => {});

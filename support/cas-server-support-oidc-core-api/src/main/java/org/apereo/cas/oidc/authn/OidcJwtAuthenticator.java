@@ -6,6 +6,7 @@ import org.apereo.cas.audit.AuditableExecution;
 import org.apereo.cas.authentication.principal.ServiceFactory;
 import org.apereo.cas.authentication.principal.WebApplicationService;
 import org.apereo.cas.configuration.CasConfigurationProperties;
+import org.apereo.cas.oidc.OidcConstants;
 import org.apereo.cas.oidc.discovery.OidcServerDiscoverySettings;
 import org.apereo.cas.oidc.issuer.OidcIssuerService;
 import org.apereo.cas.oidc.jwks.OidcJsonWebKeyStoreUtils;
@@ -18,8 +19,15 @@ import org.apereo.cas.services.ServicesManager;
 import org.apereo.cas.support.oauth.OAuth20ClientAuthenticationMethods;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
+import org.apereo.cas.ticket.ExpirationPolicy;
+import org.apereo.cas.ticket.InvalidTicketException;
+import org.apereo.cas.ticket.TicketFactory;
+import org.apereo.cas.ticket.TransientSessionTicket;
+import org.apereo.cas.ticket.TransientSessionTicketFactory;
 import org.apereo.cas.ticket.code.OAuth20Code;
+import org.apereo.cas.ticket.expiration.HardTimeoutExpirationPolicy;
 import org.apereo.cas.ticket.registry.TicketRegistry;
+import org.apereo.cas.util.DigestUtils;
 import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
@@ -63,6 +71,8 @@ public class OidcJwtAuthenticator implements Authenticator {
     protected final AuditableExecution registeredServiceAccessStrategyEnforcer;
 
     protected final TicketRegistry ticketRegistry;
+
+    protected final TicketFactory ticketFactory;
 
     protected final ServiceFactory<WebApplicationService> webApplicationServiceServiceFactory;
 
@@ -132,8 +142,8 @@ public class OidcJwtAuthenticator implements Authenticator {
                     val jwk = signedJWT.getHeader().getJWK();
                     val kid = signedJWT.getHeader().getKeyID();
                     val jkt = jwk != null ? jwk.computeThumbprint().toString() : StringUtils.EMPTY;
-                    store.findByJkt(jkt)
-                        .or(() -> store.findByJkt(kid))
+                    store.findBy(registeredService.getClientId(), jkt)
+                        .or(() -> store.findBy(registeredService.getClientId(), kid))
                         .map(ClientJwksRegistrationEntry::jwk)
                         .ifPresent(registereredKey -> {
                             val webKey = EncodingUtils.newJsonWebKey(registereredKey);
@@ -146,7 +156,12 @@ public class OidcJwtAuthenticator implements Authenticator {
                     applicationContext, Optional.of(OidcJsonWebKeyUsage.SIGNING))
                 .ifPresent(set -> set.getJsonWebKeys().forEach(keys::addJsonWebKey));
 
-            val issuer = issuerService.determineIssuer(Optional.of(registeredService));
+            val baseUrl = casProperties.getServer().getPrefix().concat('/' + OidcConstants.BASE_OIDC_URL + '/');
+            val audience = new String[]{
+                baseUrl + OidcConstants.ACCESS_TOKEN_URL,
+                baseUrl + OAuth20Constants.ACCESS_TOKEN_URL,
+                baseUrl + OAuth20Constants.TOKEN_URL
+            };
             for (var i = 0; credentials.getUserProfile() == null && i < keys.getJsonWebKeys().size(); i++) {
                 val jsonWebKey = keys.getJsonWebKeys().get(i);
                 val consumer = new JwtConsumerBuilder()
@@ -154,10 +169,15 @@ public class OidcJwtAuthenticator implements Authenticator {
                     .setRequireJwtId()
                     .setRequireExpirationTime()
                     .setRequireSubject()
-                    .setExpectedIssuer(true, issuer)
-                    .setExpectedAudience(true, registeredService.getClientId())
+                    .setExpectedIssuer(true, registeredService.getClientId())
+                    .setExpectedSubject(registeredService.getClientId())
+                    .setExpectedAudience(true, audience)
                     .build();
                 determineUserProfile(credentials, consumer);
+            }
+            if (credentials.getUserProfile() != null && !registerJwtIdentifier(jwt, registeredService.getClientId())) {
+                LOGGER.warn("Client assertion JWT identifier has already been used");
+                credentials.setUserProfile(null);
             }
             return Optional.<Credentials>of(credentials);
         }, e -> {
@@ -192,6 +212,32 @@ public class OidcJwtAuthenticator implements Authenticator {
             userProfile.addAttributes(jwt.getClaimsMap());
             credentials.setUserProfile(userProfile);
         });
+    }
+
+    protected boolean registerJwtIdentifier(final JWT jwt, final String clientId) throws Exception {
+        val claims = jwt.getJWTClaimsSet();
+        val jwtId = Objects.requireNonNull(claims.getJWTID());
+        val hashedJwtId = DigestUtils.sha256(jwtId);
+        val key = OAuth20Constants.CLIENT_ASSERTION + ':' + clientId + ':' + hashedJwtId;
+        val ticketId = TransientSessionTicketFactory.normalizeTicketId(key);
+        try {
+            val ticket = ticketRegistry.getTicket(ticketId, TransientSessionTicket.class);
+            if (ticket != null && !ticket.isExpired()) {
+                return false;
+            }
+        } catch (final InvalidTicketException e) {
+            LOGGER.trace("Client assertion JWT identifier [{}] has not been used", jwtId);
+        }
+        val expirationTime = Objects.requireNonNull(claims.getExpirationTime()).toInstant();
+        val timeToLive = Math.max(1, Duration.between(Instant.now(Clock.systemUTC()), expirationTime).toSeconds());
+        val properties = new HashMap<String, Serializable>();
+        properties.put(OAuth20Constants.CLIENT_ID, clientId);
+        properties.put("jti", hashedJwtId);
+        properties.put(ExpirationPolicy.class.getName(), new HardTimeoutExpirationPolicy(timeToLive));
+        val factory = (TransientSessionTicketFactory) ticketFactory.get(TransientSessionTicket.class);
+        val ticket = factory.create(ticketId, properties);
+        FunctionUtils.doUnchecked(_ -> ticketRegistry.addTicket(ticket));
+        return true;
     }
 
     protected boolean validateJwtAlgorithm(final Algorithm alg) {

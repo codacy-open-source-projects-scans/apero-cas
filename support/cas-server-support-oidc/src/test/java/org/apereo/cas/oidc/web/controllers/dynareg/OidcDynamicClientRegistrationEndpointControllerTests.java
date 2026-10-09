@@ -3,12 +3,19 @@ package org.apereo.cas.oidc.web.controllers.dynareg;
 import module java.base;
 import org.apereo.cas.oidc.AbstractOidcTests;
 import org.apereo.cas.oidc.OidcConstants;
+import org.apereo.cas.oidc.jwks.OidcJsonWebKeyStoreUtils;
+import org.apereo.cas.oidc.jwks.OidcJsonWebKeyUsage;
 import org.apereo.cas.util.MockWebServer;
 import lombok.val;
+import org.jose4j.jwk.JsonWebKey;
+import org.jose4j.jwk.JsonWebKeySet;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -65,7 +72,8 @@ class OidcDynamicClientRegistrationEndpointControllerTests {
     @Nested
     @TestPropertySource(properties = {
         "cas.authn.oidc.registration.dynamic-client-registration-enabled=true",
-        "cas.authn.oidc.registration.client-secret-expiration=P14D"
+        "cas.authn.oidc.registration.client-secret-expiration=P14D",
+        "cas.authn.oidc.registration.dynamic-client-registration-mode=PROTECTED"
     })
     class DefaultTests extends AbstractOidcTests {
         @Test
@@ -135,12 +143,54 @@ class OidcDynamicClientRegistrationEndpointControllerTests {
                 )
                 .andExpect(status().isBadRequest());
         }
+        
+        @Test
+        void verifyNoClientNameOperation() throws Throwable {
+            val clientId = UUID.randomUUID().toString();
+            val accessToken = getAccessToken(clientId, Set.of(OidcConstants.CLIENT_REGISTRATION_SCOPE));
+            ticketRegistry.addTicket(accessToken);
+
+            val registrationReq = """
+                    {
+                        "application_type": "web",
+                        "default_acr_values": ["mfa-duo", "mfa-gauth"],
+                        "redirect_uris": ["https://client.example.org/callback5", "https://client.example.org/callback11"],
+                        "client_name#ja-Japan-JP": "Japanese",
+                        "logo_uri": "https://client.example.org/logo.png",
+                        "policy_uri": "https://client.example.org/policy",
+                        "tos_uri": "https://client.example.org/tos",
+                        "subject_type": "pairwise",
+                        "token_endpoint_auth_method": "client_secret_basic",
+                        "jwks": {"keys": []},
+                        "id_token_signed_response_alg": "RS256",
+                        "id_token_encrypted_response_alg": "RSA1_5",
+                        "id_token_encrypted_response_enc": "A128CBC-HS256",
+                        "userinfo_encrypted_response_alg": "RSA1_5",
+                        "contacts": ["ve7jtb@example.org", "mary@example.org"]
+                    }
+                """;
+
+            mockMvc
+                .perform(post("/cas/oidc/" + OidcConstants.REGISTRATION_URL)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .with(withHttpRequestProcessor())
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer %s".formatted(accessToken.getId()))
+                    .content(registrationReq)
+                )
+                .andExpect(status().isCreated());
+        }
 
         @Test
-        void verifyOperation() throws Throwable {
-            try (val webServer = new MockWebServer(org.springframework.http.HttpStatus.OK)) {
-                webServer.responseBodyJson(List.of("https://client.example.org/callback", "https://client.example.org/callback2"));
-                webServer.start();
+        @ResourceLock(Resources.SYSTEM_PROPERTIES)
+        void verifyJwksKeyIdEvaluatesSystemProperties() throws Throwable {
+            val propertyName = "cas.oidc.jwks.leak";
+            val propertyValue = UUID.randomUUID().toString();
+            System.setProperty(propertyName, propertyValue);
+            try {
+                val key = OidcJsonWebKeyStoreUtils.generateJsonWebKey("rsa", 2048, OidcJsonWebKeyUsage.SIGNING);
+                key.setKeyId("${#systemProperties['cas.oidc.jwks.leak']}");
+                val jwks = new JsonWebKeySet(key).toJson(JsonWebKey.OutputControlLevel.PUBLIC_ONLY);
 
                 val clientId = UUID.randomUUID().toString();
                 val accessToken = getAccessToken(clientId, Set.of(OidcConstants.CLIENT_REGISTRATION_SCOPE));
@@ -149,25 +199,12 @@ class OidcDynamicClientRegistrationEndpointControllerTests {
                 val registrationReq = """
                     {
                         "application_type": "web",
-                        "default_acr_values": ["mfa-duo","mfa-gauth"],
-                        "redirect_uris": ["https://client.example.org/callback","https://client.example.org/callback2"],
-                        "client_name": "My Example",
-                        "client_name#ja-Japan-JP": "Japanese",
-                        "logo_uri": "https://client.example.org/logo.png",
-                        "policy_uri": "https://client.example.org/policy",
-                        "tos_uri": "https://client.example.org/tos",
-                        "subject_type": "pairwise",
-                        "sector_identifier_uri": "http://localhost:%s",
+                        "redirect_uris": ["https://client.example.org/callback"],
                         "token_endpoint_auth_method": "client_secret_basic",
-                        "jwks_uri": "https://client.example.org/my_public_keys.jwks",
-                        "id_token_signed_response_alg": "RS256",
-                        "id_token_encrypted_response_alg": "RSA1_5",
-                        "id_token_encrypted_response_enc": "A128CBC-HS256",
-                        "userinfo_encrypted_response_alg": "RSA1_5",
-                        "userinfo_encrypted_response_enc": "A128CBC-HS256",
-                        "contacts": ["ve7jtb@example.org", "mary@example.org"]
+                        "jwks": %s,
+                        "contacts": ["cas@example.org"]
                     }
-                    """.formatted(webServer.getPort());
+                    """.formatted(jwks);
 
                 mockMvc
                     .perform(post("/cas/oidc/" + OidcConstants.REGISTRATION_URL)
@@ -177,50 +214,10 @@ class OidcDynamicClientRegistrationEndpointControllerTests {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer %s".formatted(accessToken.getId()))
                         .content(registrationReq)
                     )
-                    .andExpect(status().isCreated());
-            }
-        }
-
-        @Test
-        void verifyNoClientNameOperation() throws Throwable {
-            try (val webServer = new MockWebServer(org.springframework.http.HttpStatus.OK)) {
-                webServer.responseBodyJson(List.of("https://client.example.org/callback", "https://client.example.org/callback2"));
-                webServer.start();
-
-                val clientId = UUID.randomUUID().toString();
-                val accessToken = getAccessToken(clientId, Set.of(OidcConstants.CLIENT_REGISTRATION_SCOPE));
-                ticketRegistry.addTicket(accessToken);
-
-                val registrationReq = """
-                        {
-                            "application_type": "web",
-                            "default_acr_values": ["mfa-duo", "mfa-gauth"],
-                            "redirect_uris": ["https://client.example.org/callback", "https://client.example.org/callback2"],
-                            "client_name#ja-Japan-JP": "Japanese",
-                            "logo_uri": "https://client.example.org/logo.png",
-                            "policy_uri": "https://client.example.org/policy",
-                            "tos_uri": "https://client.example.org/tos",
-                            "subject_type": "pairwise",
-                            "sector_identifier_uri": "http://localhost:%s",
-                            "token_endpoint_auth_method": "client_secret_basic",
-                            "jwks": {"keys": []},
-                            "id_token_signed_response_alg": "RS256",
-                            "id_token_encrypted_response_alg": "RSA1_5",
-                            "id_token_encrypted_response_enc": "A128CBC-HS256",
-                            "userinfo_encrypted_response_alg": "RSA1_5",
-                            "contacts": ["ve7jtb@example.org", "mary@example.org"]
-                        }
-                    """.formatted(webServer.getPort());
-
-                mockMvc
-                    .perform(post("/cas/oidc/" + OidcConstants.REGISTRATION_URL)
-                        .accept(MediaType.APPLICATION_JSON)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .with(withHttpRequestProcessor())
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer %s".formatted(accessToken.getId()))
-                        .content(registrationReq)
-                    )
-                    .andExpect(status().isCreated());
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.jwks").doesNotExist());
+            } finally {
+                System.clearProperty(propertyName);
             }
         }
 
@@ -230,7 +227,7 @@ class OidcDynamicClientRegistrationEndpointControllerTests {
             val accessToken = getAccessToken(clientId, Set.of(OidcConstants.CLIENT_REGISTRATION_SCOPE));
             ticketRegistry.addTicket(accessToken);
 
-            try (val webServer = new MockWebServer(org.springframework.http.HttpStatus.OK)) {
+            try (val webServer = new MockWebServer(HttpStatus.OK)) {
                 webServer.responseBodyJson(List.of("https://client.example.org/callback", "https://client.example.org/callback2"));
                 webServer.start();
 
@@ -273,6 +270,26 @@ class OidcDynamicClientRegistrationEndpointControllerTests {
                     )
                     .andExpect(status().isBadRequest());
             }
+        }
+
+        @Test
+        void verifyCanonicalRegistrationPathRequiresAuth() throws Throwable {
+            mockMvc.perform(post("/cas/oidc/" + OidcConstants.REGISTRATION_URL)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .with(withHttpRequestProcessor())
+                    .content("{}"))
+                .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        void verifyInjectedSegmentBypassesAuth() throws Throwable {
+            mockMvc.perform(post("/cas/oidc/x/" + OidcConstants.REGISTRATION_URL)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .with(withHttpRequestProcessor())
+                    .content("{}"))
+                .andExpect(status().isUnauthorized());
         }
     }
 }

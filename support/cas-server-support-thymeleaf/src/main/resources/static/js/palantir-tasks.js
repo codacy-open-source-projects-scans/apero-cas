@@ -1,56 +1,352 @@
 async function initializeScheduledTasksOperations() {
 
+    const threadDumpStacks = new Map();
+    const threadDumpStackDialogElement = document.getElementById("threadDumpStackDialog");
+    const threadDumpStackDialog = threadDumpStackDialogElement
+        ? window.mdc.dialog.MDCDialog.attachTo(threadDumpStackDialogElement)
+        : undefined;
+
+    function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, s => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[s]));
+    }
+
+    function toThreadStackKey(thread) {
+        return String(thread.threadId ?? thread.id ?? thread.threadName ?? "");
+    }
+
+    function threadStackTrace(thread) {
+        return Array.isArray(thread.stackTrace) ? thread.stackTrace : [];
+    }
+
+    function isVirtualThread(thread) {
+        return thread.virtual === true || thread.virtualThread === true || String(thread.threadName ?? "").startsWith("VirtualThread[");
+    }
+
+    function threadStateClass(state) {
+        switch (state) {
+            case "RUNNABLE":
+                return "thread-state-runnable";
+            case "BLOCKED":
+                return "thread-state-blocked";
+            case "WAITING":
+            case "TIMED_WAITING":
+                return "thread-state-waiting";
+            case "TERMINATED":
+                return "thread-state-terminated";
+            default:
+                return "thread-state-other";
+        }
+    }
+
+    function renderThreadName(thread) {
+        const name = thread.threadName ?? "N/A";
+        const virtualBadge = isVirtualThread(thread)
+            ? "<span class=\"thread-dump-virtual-badge\">virtual</span>"
+            : "";
+        return `<div class="thread-dump-name-cell">
+                    <code title="${escapeHtml(name)}">${escapeHtml(name)}</code>
+                    ${virtualBadge}
+                </div>`;
+    }
+
+    function renderThreadState(state) {
+        const safeState = escapeHtml(state ?? "UNKNOWN");
+        return `<span class="thread-state-badge ${threadStateClass(state)}">${safeState}</span>`;
+    }
+
+    function renderBoolean(value) {
+        return value === true
+            ? "<i class=\"mdc-tab__icon mdi mdi-check\" aria-label=\"true\"></i>"
+            : "<span aria-label=\"false\">-</span>";
+    }
+
+    function threadCpuTime(thread) {
+        const cpuTime = thread.cpuTime ?? thread.cpuTimeNanos ?? thread.threadCpuTime ?? thread.threadCpuTimeNanos ?? thread.cpu;
+        if (cpuTime === undefined || cpuTime === null || cpuTime < 0) {
+            return null;
+        }
+        return cpuTime;
+    }
+
+    function formatThreadCpuTime(thread) {
+        const cpuTime = threadCpuTime(thread);
+        if (cpuTime === null) {
+            return "-";
+        }
+        if (typeof cpuTime === "string") {
+            return escapeHtml(cpuTime);
+        }
+        const milliseconds = cpuTime > 1_000_000 ? cpuTime / 1_000_000 : cpuTime;
+        return `${Math.round(milliseconds)} ms`;
+    }
+
+    function formatStackFrame(frame) {
+        if (typeof frame === "string") {
+            return frame;
+        }
+        const className = frame.className ?? "";
+        const methodName = frame.methodName ?? "";
+        const fileName = frame.fileName ?? "Unknown Source";
+        const lineNumber = Number.isFinite(frame.lineNumber) && frame.lineNumber >= 0 ? `:${frame.lineNumber}` : "";
+        const location = frame.nativeMethod === true ? "Native Method" : `${fileName}${lineNumber}`;
+        return `at ${className}.${methodName}(${location})`;
+    }
+
+    function applyMdcDataTableControls(selector) {
+        const wrapper = $(selector).closest(".dataTables_wrapper, .dt-container");
+        wrapper.find(".dataTables_filter input, .dt-search input")
+            .addClass("mdc-text-field__input form-control palantir-datatable-search-input")
+            .attr("aria-label", "Search table");
+        wrapper.find(".dataTables_length select, .dt-length select")
+            .addClass("mdc-select__native-control form-select");
+        wrapper.find(".paginate_button, .dt-paging-button")
+            .addClass("mdc-button mdc-button--outlined");
+    }
+
+    function showThreadStack(stackKey) {
+        const thread = threadDumpStacks.get(stackKey);
+        if (!thread) {
+            return;
+        }
+        const stackTrace = threadStackTrace(thread);
+        $("#threadDumpStackDialog-title").text(`Thread Stack: ${thread.threadName ?? "N/A"}`);
+        $("#threadDumpStackSummary").html(`
+            <span><strong>ID:</strong> ${escapeHtml(thread.threadId ?? "N/A")}</span>
+            <span><strong>State:</strong> ${escapeHtml(thread.threadState ?? "UNKNOWN")}</span>
+            <span><strong>Frames:</strong> ${stackTrace.length}</span>
+        `);
+        $("#threadDumpStackTrace").text(stackTrace.map(formatStackFrame).join("\n"));
+        threadDumpStackDialog?.open();
+    }
+
     const threadDumpTable = $("#threadDumpTable").DataTable({
+        deferRender: true,
         pageLength: 10,
         autoWidth: false,
+        order: [],
+        columns: [
+            {
+                data: "threadName",
+                width: "31%",
+                render: (data, type, row) => type === "display" ? renderThreadName(row) : data
+            },
+            {
+                data: "threadId",
+                width: "8%",
+                render: (data, type) => type === "display" ? `<code>${escapeHtml(data)}</code>` : data
+            },
+            {
+                data: "threadState",
+                width: "15%",
+                render: (data, type) => type === "display" ? renderThreadState(data) : data
+            },
+            {
+                data: "priority",
+                width: "8%",
+                render: (data, type) => type === "display" ? `<code>${escapeHtml(data)}</code>` : data
+            },
+            {
+                data: "daemon",
+                width: "8%",
+                render: (data, type) => type === "display" ? renderBoolean(data) : data
+            },
+            {
+                data: null,
+                width: "12%",
+                render: (data, type, row) => {
+                    const cpuTime = threadCpuTime(row);
+                    if (type === "sort" || type === "type") {
+                        return cpuTime ?? -1;
+                    }
+                    return formatThreadCpuTime(row);
+                }
+            }
+        ],
+        initComplete: () => applyMdcDataTableControls("#threadDumpTable"),
         drawCallback: settings => {
             $("#threadDumpTable tr").addClass("mdc-data-table__row");
             $("#threadDumpTable td").addClass("mdc-data-table__cell");
+            applyMdcDataTableControls("#threadDumpTable");
+        }
+    });
+
+    initializeDataTableContextMenu({
+        table: threadDumpTable,
+        selector: "#threadDumpTable tbody tr",
+        items: {
+            stack: {
+                name: "View Stack Trace",
+                icon: contextMenuIcon("mdi-cog-outline"),
+                visible: context => threadStackTrace(context.rowData).length > 0
+            }
+        },
+        callback: (key, context) => {
+            if (key === "stack") {
+                showThreadStack(toThreadStackKey(context.rowData));
+            }
         }
     });
 
 
-    const groupColumn = 0;
     const scheduledtasks = $("#scheduledTasksTable").DataTable({
+        deferRender: true,
         pageLength: 25,
         autoWidth: false,
-        columnDefs: [{visible: false, targets: groupColumn}],
-        order: [groupColumn, "asc"],
+        order: [[0, "asc"], [1, "asc"]],
+        columns: [
+            {
+                data: "type",
+                width: "8%",
+                render: (data, type) => type === "display" ? renderScheduledTaskType(data) : data
+            },
+            {
+                data: "task",
+                width: "14%",
+                render: (data, type) => type === "display" ? `<code>${escapeHtml(data)}</code>` : data
+            },
+            {
+                data: "target",
+                width: "20%",
+                render: (data, type) => type === "display" ? renderScheduledTaskTarget(data) : data
+            },
+            {
+                data: "initialDelay",
+                width: "8%",
+                render: (data, type) => type === "display" ? formatScheduledTaskDuration(data) : data
+            },
+            {
+                data: "interval",
+                width: "8%",
+                render: (data, type) => type === "display" ? formatScheduledTaskDuration(data) : data
+            },
+            {
+                data: "lastStatus",
+                width: "9%",
+                render: (data, type, row) => type === "display" ? renderScheduledTaskStatus(data, row.exception) : data
+            },
+            {
+                data: "lastExecution",
+                width: "10%",
+                render: (data, type) => type === "display" ? formatScheduledTaskTime(data) : data
+            },
+            {
+                data: "nextExecution",
+                width: "10%",
+                render: (data, type) => type === "display" ? formatScheduledTaskTime(data) : data
+            }
+        ],
         drawCallback: settings => {
             $("#scheduledTasksTable tr").addClass("mdc-data-table__row");
             $("#scheduledTasksTable td").addClass("mdc-data-table__cell");
-
-            const api = settings.api;
-            const rows = api.rows({page: "current"}).nodes();
-            let last = null;
-            api.column(groupColumn, {page: "current"})
-                .data()
-                .each((group, i) => {
-                    if (last !== group) {
-                        $(rows).eq(i).before(
-                            `<tr style='font-weight: bold; background-color:var(--cas-theme-primary); color:var(--mdc-text-button-label-text-color);'>
-                                            <td colspan="2">${group}</td>
-                                        </tr>`.trim());
-                        last = group;
-                    }
-                });
+            applyMdcDataTableControls("#scheduledTasksTable");
         }
     });
 
+    function renderScheduledTaskType(value) {
+        return `<span class="scheduled-task-type">${escapeHtml(camelcaseToTitleCase(value ?? "Unknown"))}</span>`;
+    }
+
+    function renderScheduledTaskTarget(value) {
+        if (!value) {
+            return "-";
+        }
+        return `<code class="scheduled-task-target" title="${escapeHtml(value)}">${escapeHtml(value)}</code>`;
+    }
+
+    function renderOptionalCode(value) {
+        return value === undefined || value === null || value === "" ? "-" : `<code>${escapeHtml(value)}</code>`;
+    }
+
+    function formatScheduledTaskDuration(value) {
+        if (value === undefined || value === null || value === "") {
+            return "-";
+        }
+        const duration = Number(value);
+        if (!Number.isFinite(duration)) {
+            return escapeHtml(value);
+        }
+        if (duration === 0) {
+            return "0 ms";
+        }
+        if (duration % 3_600_000 === 0) {
+            return `${duration / 3_600_000} h`;
+        }
+        if (duration % 60_000 === 0) {
+            return `${duration / 60_000} min`;
+        }
+        if (duration % 1_000 === 0) {
+            return `${duration / 1_000} s`;
+        }
+        return `${duration} ms`;
+    }
+
+    function formatScheduledTaskTime(value) {
+        if (!value) {
+            return "-";
+        }
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? escapeHtml(value) : escapeHtml(date.toLocaleString());
+    }
+
+    function scheduledTaskStatusClass(status) {
+        switch (status) {
+            case "SUCCESS":
+                return "scheduled-task-status-success";
+            case "ERROR":
+            case "FAILURE":
+            case "FAILED":
+                return "scheduled-task-status-error";
+            case "STARTED":
+            case "RUNNING":
+                return "scheduled-task-status-running";
+            default:
+                return "scheduled-task-status-none";
+        }
+    }
+
+    function renderScheduledTaskStatus(status, exception) {
+        const value = status ?? "NONE";
+        const title = exception?.message ?? exception?.type ?? value;
+        return `<span class="scheduled-task-status ${scheduledTaskStatusClass(value)}" title="${escapeHtml(title)}">
+                    ${escapeHtml(value)}
+                </span>`;
+    }
+
+    function renderScheduledTaskException(exception) {
+        if (!exception) {
+            return "-";
+        }
+        const message = exception.message ? `: ${exception.message}` : "";
+        return `<code class="scheduled-task-exception" title="${escapeHtml(exception.type)}${escapeHtml(message)}">
+                    ${escapeHtml(exception.type)}${escapeHtml(message)}
+                </code>`;
+    }
+
+    function toScheduledTaskRow(groupName, task) {
+        const target = task.runnable?.target ?? "";
+        const lastExecution = task.lastExecution ?? {};
+        const taskName = target ? getLastTwoWords(target) : camelcaseToTitleCase(groupName ?? "Scheduled Task");
+        return {
+            type: groupName,
+            task: taskName,
+            target: target,
+            expression: task.expression ?? null,
+            trigger: task.trigger ?? null,
+            initialDelay: task.initialDelay ?? null,
+            interval: task.interval ?? null,
+            lastStatus: lastExecution.status ?? "NONE",
+            lastExecution: lastExecution.time ?? null,
+            nextExecution: task.nextExecution?.time ?? null,
+            exception: lastExecution.exception ?? null
+        };
+    }
+
     function addScheduledTaskCategory(groupName, items) {
         if (items !== undefined && Array.isArray(items)) {
-            for (const group of items) {
-                const flattened = flattenJSON(group);
-                for (const [key, value] of Object.entries(flattened)) {
-                    const target = flattened["runnable.target"];
-                    if (target !== value) {
-                        scheduledtasks.row.add({
-                            0: `<code>${camelcaseToTitleCase(groupName)} / ${getLastTwoWords(target)}</code>`,
-                            1: `<code>${key}</code>`,
-                            2: `<code>${value}</code>`
-                        });
-                    }
-                }
+            for (const task of items) {
+                scheduledtasks.row.add(toScheduledTaskRow(groupName, task));
             }
         }
     }
@@ -68,47 +364,70 @@ async function initializeScheduledTasksOperations() {
         });
     }
 
-    if (CasActuatorEndpoints.metrics()) {
-        initializeJvmMetrics();
-        setInterval(() => {
-            if (currentActiveTab === Tabs.TASKS.index) {
-                initializeJvmMetrics();
-            }
-        }, palantirSettings().refreshInterval);
-    }
-
-    function fetchThreadDump() {
-        $.get(CasActuatorEndpoints.threadDump(), response => {
+    /**
+     * Read the thread dump once and render both views it feeds.
+     *
+     * The table and the thread-state chart each used to issue their own request for the same
+     * payload, so every refresh dumped the JVM's threads twice.
+     *
+     * @returns {Promise<void>} resolved once both views have been updated
+     */
+    async function refreshThreadDump() {
+        if (!CasActuatorEndpoints.threadDump()) {
+            return;
+        }
+        try {
+            const response = await $.get(CasActuatorEndpoints.threadDump());
             threadDumpTable.clear();
+            threadDumpStacks.clear();
+            const threadStates = {};
             for (const thread of response.threads) {
-                threadDumpTable.row.add({
-                    0: `<code>${thread.threadId}</code>`,
-                    1: `<code>${thread.threadName}</code>`,
-                    2: `<code>${thread.threadState}</code>`,
-                    3: `<code>${thread.priority}</code>`,
-                    4: `<code>${thread.daemon}</code>`,
-                    5: `<code>${thread.suspended}</code>`
-                });
+                threadDumpStacks.set(toThreadStackKey(thread), thread);
+                threadDumpTable.row.add(thread);
+                threadStates[thread.threadState] = (threadStates[thread.threadState] ?? 0) + 1;
             }
             threadDumpTable.draw();
-        }).fail((xhr, status, error) => {
-            console.error("Error fetching data:", error);
+            updateThreadDumpChart(threadStates);
+        } catch (xhr) {
+            console.error("Error fetching thread dump:", xhr);
             displayBanner(xhr);
-        });
+        }
     }
 
+    async function refreshTasksMetrics() {
+        await Promise.all([initializeJvmMetrics(), refreshThreadDump()]);
+    }
 
-    if (CasActuatorEndpoints.threadDump()) {
-        fetchThreadDump();
+    if (CasActuatorEndpoints.metrics() || CasActuatorEndpoints.threadDump()) {
+        await refreshTasksMetrics();
         setInterval(() => {
-            if (currentActiveTab === Tabs.TASKS.index) {
-                fetchThreadDump();
+            if (currentActiveTab === Tabs.TASKS.index && document.visibilityState === "visible") {
+                refreshTasksMetrics();
             }
         }, palantirSettings().refreshInterval);
     }
 }
 
-function initializeJvmMetrics() {
+/**
+ * Render thread-state counts onto the thread dump chart.
+ *
+ * @param threadStates counts keyed by thread state
+ */
+function updateThreadDumpChart(threadStates) {
+    if (!threadDumpChart) {
+        return;
+    }
+    threadDumpChart.data.labels = Object.keys(threadStates);
+    const values = Object.values(threadStates);
+    threadDumpChart.data.datasets[0] = {
+        label: `${values.reduce((sum, value) => sum + value, 0)} Threads`,
+        data: values
+    };
+    threadDumpChart.resize();
+    threadDumpChart.update();
+}
+
+async function initializeJvmMetrics() {
     function fetchJvmThreadMetric(metricName) {
         return new Promise((resolve, reject) =>
             $.get(`${CasActuatorEndpoints.metrics()}/${metricName}`, response => resolve(response.measurements[0].value)).fail((xhr, status, error) => {
@@ -131,44 +450,11 @@ function initializeJvmMetrics() {
         return results.map(result => Number(result));
     }
 
-    async function fetchThreadDump() {
-        return new Promise((resolve, reject) =>
-            $.get(CasActuatorEndpoints.threadDump(), response => {
-                let threadData = {};
-                for (const thread of response.threads) {
-                    if (!threadData[thread.threadState]) {
-                        threadData[thread.threadState] = 0;
-                    }
-                    threadData[thread.threadState] += 1;
-                }
-                resolve(threadData);
-            }).fail((xhr, status, error) => {
-                console.error("Error thread dump:", error);
-                displayBanner(xhr);
-                reject(error);
-            }));
-
+    if (!CasActuatorEndpoints.metrics() || !jvmThreadsChart) {
+        return;
     }
-
-    if (CasActuatorEndpoints.metrics()) {
-        fetchJvmThreadsMetrics()
-            .then(payload => {
-                jvmThreadsChart.data.datasets[0].data = payload;
-                jvmThreadsChart.update();
-            });
-    }
-
-
-    if (CasActuatorEndpoints.threadDump()) {
-        fetchThreadDump().then(payload => {
-            threadDumpChart.data.labels = Object.keys(payload);
-            const values = Object.values(payload);
-            threadDumpChart.data.datasets[0] = {
-                label: `${values.reduce((sum, value) => sum + value, 0)} Threads`,
-                data: values
-            };
-            threadDumpChart.update();
-        });
-    }
+    const payload = await fetchJvmThreadsMetrics();
+    jvmThreadsChart.data.datasets[0].data = payload;
+    jvmThreadsChart.resize();
+    jvmThreadsChart.update();
 }
-

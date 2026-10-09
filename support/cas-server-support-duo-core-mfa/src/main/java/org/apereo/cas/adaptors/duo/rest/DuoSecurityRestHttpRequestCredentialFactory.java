@@ -17,7 +17,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
-import org.jspecify.annotations.NonNull;
 import org.springframework.util.MultiValueMap;
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -46,7 +45,7 @@ public class DuoSecurityRestHttpRequestCredentialFactory implements RestHttpRequ
     
     @Override
     public List<Credential> fromRequest(final HttpServletRequest request,
-                                        final MultiValueMap<@NonNull String, String> requestBody) throws Throwable {
+                                        final MultiValueMap<String, String> requestBody) throws Throwable {
         if (requestBody == null || requestBody.isEmpty()) {
             LOGGER.debug("Skipping [{}] because the request body is null or empty", getClass().getSimpleName());
             return new ArrayList<>();
@@ -68,11 +67,14 @@ public class DuoSecurityRestHttpRequestCredentialFactory implements RestHttpRequ
 
     @Override
     public List<Credential> fromAuthentication(final HttpServletRequest request,
-                                               final MultiValueMap<@NonNull String, String> requestBody,
+                                               final MultiValueMap<String, String> requestBody,
                                                final Authentication authentication,
                                                final MultifactorAuthenticationProvider provider) {
         val principal = authentication.getPrincipal();
-        val credential = new DuoSecurityDirectCredential(principal, provider.getId());
+        val passcode = requestBody != null ? requestBody.getFirst(PARAMETER_NAME_PASSCODE) : null;
+        val credential = StringUtils.isNotBlank(passcode)
+            ? new DuoSecurityPasscodeCredential(principal.getId(), Objects.requireNonNull(passcode), provider.getId())
+            : new DuoSecurityDirectCredential(principal, provider.getId());
         val credentialMetadata = new BasicCredentialMetadata(credential);
         credentialMetadata.setTenant(tenantExtractor.extract(request).map(TenantDefinition::getId).orElse(null));
         return List.of(prepareCredential(request, credential));

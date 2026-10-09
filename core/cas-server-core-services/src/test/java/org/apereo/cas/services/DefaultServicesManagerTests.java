@@ -4,6 +4,7 @@ import module java.base;
 import org.apereo.cas.config.BaseAutoConfigurationTests;
 import org.apereo.cas.services.query.RegisteredServiceQuery;
 import org.apereo.cas.test.CasTestExtension;
+import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.RandomUtils;
 import lombok.val;
 import org.junit.jupiter.api.Assertions;
@@ -11,12 +12,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.Ordered;
+import org.springframework.test.context.ActiveProfiles;
+import static org.awaitility.Awaitility.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -26,12 +28,12 @@ import static org.mockito.Mockito.*;
  */
 @Tag("RegisteredService")
 @ExtendWith(CasTestExtension.class)
-@Execution(ExecutionMode.SAME_THREAD)
 class DefaultServicesManagerTests {
 
     @Nested
     @SpringBootTest(classes = BaseAutoConfigurationTests.SharedTestConfiguration.class,
         properties = "cas.service-registry.core.index-services=false")
+    @ResourceLock("servicesManager:no-indexing")
     class NoIndexingTests extends AbstractServicesManagerTests {
         @Test
         void verifyQuerying() {
@@ -59,6 +61,7 @@ class DefaultServicesManagerTests {
 
     @Nested
     @SpringBootTest(classes = BaseAutoConfigurationTests.SharedTestConfiguration.class)
+    @ResourceLock("servicesManager:default")
     class DefaultTests extends AbstractServicesManagerTests {
         @Test
         void verifyOperation() {
@@ -95,6 +98,15 @@ class DefaultServicesManagerTests {
             assertNotNull(servicesManager.save(svc, false));
             assertEquals(1, servicesManager.getDomains().count());
             assertFalse(servicesManager.getServicesForDomain("example.org").isEmpty());
+        }
+
+        @Test
+        void verifySaveWithoutServiceName() {
+            val svc = new CasRegisteredService();
+            svc.setId(RandomUtils.nextLong());
+            svc.setName(null);
+            svc.setServiceId("https://www.example.com/" + svc.getId());
+            assertNotNull(servicesManager.save(svc, false));
         }
 
         @Test
@@ -164,18 +176,15 @@ class DefaultServicesManagerTests {
         }
 
         @Test
-        void verifySaveAndRemoveFromCache() throws InterruptedException {
+        void verifySaveAndRemoveFromCache() {
             val registeredService = new CasRegisteredService();
             registeredService.setId(RandomUtils.nextLong());
             registeredService.setName(UUID.randomUUID().toString());
             registeredService.setServiceId(registeredService.getName());
             assertFalse(isServiceInCache(null, registeredService.getId()));
             this.servicesManager.save(registeredService);
-            assertTrue(isServiceInCache(null, registeredService.getId()));
-            Thread.sleep(1_000);
-            assertTrue(isServiceInCache(null, registeredService.getId()));
-            Thread.sleep(5_000);
-            assertTrue(isServiceInCache(null, registeredService.getId()));
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5))
+                .until(() -> isServiceInCache(null, registeredService.getId()));
         }
 
         @Test
@@ -194,11 +203,12 @@ class DefaultServicesManagerTests {
 
     @Nested
     @SpringBootTest(classes = BaseAutoConfigurationTests.SharedTestConfiguration.class)
+    @ResourceLock("servicesManager:default")
     class IndexableTests {
         @Autowired
         @Qualifier(ServicesManager.BEAN_NAME)
         private ChainingServicesManager servicesManager;
-        
+
         @Test
         void verifyOperation() {
             val indexedServicesManager = (IndexableServicesManager) servicesManager.getServiceManagers().getFirst();
@@ -229,6 +239,30 @@ class DefaultServicesManagerTests {
     @Nested
     @SpringBootTest(classes = BaseAutoConfigurationTests.SharedTestConfiguration.class,
         properties = "cas.service-registry.cache.cache-size=0")
+    @ResourceLock("servicesManager:no-cache")
     class NoCacheTests extends AbstractServicesManagerTests {
+    }
+
+
+    @Nested
+    @SpringBootTest(classes = BaseAutoConfigurationTests.SharedTestConfiguration.class)
+    @ActiveProfiles({"prod1", "qa1"})
+    @ResourceLock("servicesManager:environment")
+    class EnvironmentTests extends AbstractServicesManagerTests {
+
+        @Test
+        void verifyServiceByEnvironment() {
+            val registeredService = new CasRegisteredService();
+            registeredService.setId(RandomUtils.nextLong());
+            registeredService.setName(getClass().getSimpleName());
+            registeredService.setServiceId(getClass().getSimpleName());
+            registeredService.setEnvironments(CollectionUtils.wrapHashSet("dev1"));
+            servicesManager.save(registeredService);
+            assertNull(servicesManager.findServiceBy(RegisteredServiceTestUtils.getService(getClass().getSimpleName())));
+            assertNull(servicesManager.findServiceBy(registeredService.getId()));
+            registeredService.setEnvironments(CollectionUtils.wrapHashSet("prod1"));
+            servicesManager.save(registeredService);
+            assertNotNull(servicesManager.findServiceBy(registeredService.getId()));
+        }
     }
 }

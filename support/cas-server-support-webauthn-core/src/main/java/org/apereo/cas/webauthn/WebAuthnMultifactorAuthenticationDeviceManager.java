@@ -6,6 +6,7 @@ import org.apereo.cas.authentication.device.MultifactorAuthenticationDeviceManag
 import org.apereo.cas.authentication.device.MultifactorAuthenticationRegisteredDevice;
 import org.apereo.cas.authentication.principal.Principal;
 import org.apereo.cas.util.function.FunctionUtils;
+import org.apereo.cas.webauthn.web.WebAuthnController;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.yubico.core.RegistrationStorage;
 import com.yubico.data.CredentialRegistration;
@@ -13,7 +14,6 @@ import com.yubico.webauthn.attestation.Attestation;
 import com.yubico.webauthn.data.ByteArray;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 
 /**
@@ -27,8 +27,10 @@ public class WebAuthnMultifactorAuthenticationDeviceManager implements Multifact
     private static final ObjectWriter OBJECT_WRITER = WebAuthnUtils.getObjectMapper().writer();
 
     private final RegistrationStorage webAuthnCredentialRepository;
-    private final ObjectProvider<@NonNull MultifactorAuthenticationProvider> multifactorAuthenticationProvider;
-    
+    private final ObjectProvider<MultifactorAuthenticationProvider> multifactorAuthenticationProvider;
+
+    private final String relyingPartyId;
+
     @Override
     public List<MultifactorAuthenticationRegisteredDevice> findRegisteredDevices(final Principal principal) {
         val registrations = webAuthnCredentialRepository.getRegistrationsByUsername(principal.getId());
@@ -53,20 +55,38 @@ public class WebAuthnMultifactorAuthenticationDeviceManager implements Multifact
         return List.of("Web Authn");
     }
 
+    /**
+     * Map a registration to a registered device. When attestation metadata names no device, the passkey provider known
+     * by the registration's AAGUID gives the model. A provider with an icon also adds the {@code icon} detail, the path
+     * of the icon endpoint rather than the image itself, since registered devices are kept in the flow state. The
+     * {@code relyingPartyId} detail lets the account profile tell the browser, through the WebAuthn Signal API, that
+     * a deleted credential is no longer recognized, so that it stops being offered even when it was the account's last.
+     *
+     * @param acct the registration
+     * @return the registered device
+     */
     protected MultifactorAuthenticationRegisteredDevice mapWebAuthnAccount(final CredentialRegistration acct) {
         val attestation = Optional.ofNullable(acct.getAttestationMetadata()).orElseGet(Attestation::empty);
         val vendor = attestation.getVendorProperties().orElseGet(Map::of);
         val device = attestation.getDeviceProperties().orElseGet(Map::of);
+        val passkeyProvider = WebAuthnUtils.getPasskeyProvider(acct.getAaguid());
+        val details = new LinkedHashMap<String, Object>();
+        details.put("providerId", multifactorAuthenticationProvider.getObject().getId());
+        details.put("relyingPartyId", relyingPartyId);
+        passkeyProvider.filter(provider -> provider.icon() != null)
+            .ifPresent(provider -> details.put("icon", WebAuthnController.getPasskeyProviderIconPath(acct.getAaguid())));
         return FunctionUtils.doUnchecked(() -> MultifactorAuthenticationRegisteredDevice
             .builder()
             .id(acct.getCredential().getCredentialId().getBase64Url())
             .name(acct.getCredentialNickname())
             .type(vendor.get("name"))
-            .model(device.get("displayName"))
+            .model(Optional.ofNullable(device.get("displayName"))
+                .or(() -> passkeyProvider.map(WebAuthnUtils.PasskeyProvider::name))
+                .orElse(null))
             .lastUsedDateTime(acct.getRegistrationTime().toString())
             .payload(OBJECT_WRITER.writeValueAsString(acct))
             .source(getSource().getFirst())
-            .details(Map.of("providerId", multifactorAuthenticationProvider.getObject().getId()))
+            .details(details)
             .build());
     }
 }

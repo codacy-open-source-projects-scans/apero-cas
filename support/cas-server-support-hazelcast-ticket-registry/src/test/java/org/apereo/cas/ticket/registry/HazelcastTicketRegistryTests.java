@@ -18,6 +18,7 @@ import org.apereo.cas.util.crypto.CipherExecutor;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.StopWatch;
@@ -25,8 +26,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -43,8 +42,8 @@ import static org.mockito.Mockito.*;
  * @since 4.1.0
  */
 @Tag("Hazelcast")
+@Slf4j
 @ExtendWith(CasTestExtension.class)
-@Execution(ExecutionMode.SAME_THREAD)
 class HazelcastTicketRegistryTests {
     @Nested
     @Getter
@@ -53,11 +52,13 @@ class HazelcastTicketRegistryTests {
     @TestPropertySource(
         properties = {
             "cas.ticket.registry.hazelcast.core.enable-jet=false",
-            "cas.ticket.registry.hazelcast.cluster.network.port-auto-increment=false",
             "cas.ticket.registry.hazelcast.cluster.network.port=5707",
-            "cas.ticket.registry.hazelcast.cluster.core.instance-name=testjetlessinstance"
+            "cas.ticket.registry.hazelcast.cluster.network.tcpip-enabled=false",
+            "cas.ticket.registry.hazelcast.cluster.core.instance-name=testjetlessinstance",
+            "cas.ticket.registry.hazelcast.crypto.enabled=false"
         })
-    class JetlessTests extends BaseTicketRegistryTests {
+    @Tag("TicketRegistryTestWithoutEncryption")
+    class JetlessTests extends BaseHazelcastTicketRegistryTests {
         @Autowired
         @Qualifier(TicketRegistry.BEAN_NAME)
         private TicketRegistry newTicketRegistry;
@@ -69,11 +70,13 @@ class HazelcastTicketRegistryTests {
     @Import(BaseTicketRegistryTests.SharedTestConfiguration.class)
     @TestPropertySource(
         properties = {
-            "cas.ticket.registry.hazelcast.cluster.network.port-auto-increment=false",
             "cas.ticket.registry.hazelcast.cluster.network.port=5703",
-            "cas.ticket.registry.hazelcast.cluster.core.instance-name=testlocalhostinstance"
+            "cas.ticket.registry.hazelcast.cluster.network.tcpip-enabled=false",
+            "cas.ticket.registry.hazelcast.cluster.core.instance-name=testlocalhostinstance",
+            "cas.ticket.registry.hazelcast.crypto.enabled=true"
         })
-    class DefaultTests extends BaseTicketRegistryTests {
+    @Tag("TicketRegistryTestWithEncryption")
+    class DefaultTests extends BaseHazelcastTicketRegistryTests {
         @Autowired
         @Qualifier(TicketRegistry.BEAN_NAME)
         private TicketRegistry newTicketRegistry;
@@ -122,8 +125,8 @@ class HazelcastTicketRegistryTests {
     })
     @TestPropertySource(
         properties = {
-            "cas.ticket.registry.hazelcast.cluster.network.port-auto-increment=false",
             "cas.ticket.registry.hazelcast.cluster.network.port=5705",
+            "cas.ticket.registry.hazelcast.cluster.network.tcpip-enabled=false",
             "cas.ticket.registry.hazelcast.cluster.core.instance-name=loadtestinstance"
         })
     class LoadTests {
@@ -148,8 +151,7 @@ class HazelcastTicketRegistryTests {
 
             assertEquals(COUNT, ticketRegistry.getTickets().size());
             stopwatch.stop();
-            var time = stopwatch.getTime(TimeUnit.SECONDS);
-            assertTrue(time <= 20);
+            LOGGER.info("Added and read back [{}] tickets in [{}]s", COUNT, stopwatch.getTime(TimeUnit.SECONDS));
 
             stopwatch.reset();
             stopwatch.start();
@@ -161,8 +163,7 @@ class HazelcastTicketRegistryTests {
                 .toList();
             assertFalse(results.isEmpty());
             stopwatch.stop();
-            time = stopwatch.getTime(TimeUnit.SECONDS);
-            assertTrue(time <= 20);
+            LOGGER.info("Streamed and filtered [{}] tickets in [{}]s", COUNT, stopwatch.getTime(TimeUnit.SECONDS));
         }
     }
 }

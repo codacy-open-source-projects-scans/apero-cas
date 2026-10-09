@@ -17,6 +17,7 @@ import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.spring.beans.BeanCondition;
 import org.apereo.cas.util.spring.beans.BeanSupplier;
 import org.apereo.cas.util.spring.boot.ConditionalOnFeatureEnabled;
+import org.apereo.cas.util.spring.boot.ConditionalOnMatchingHostname;
 import org.apereo.cas.util.thread.Cleanable;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
@@ -26,8 +27,8 @@ import org.apereo.inspektr.audit.support.JdbcAuditTrailManager;
 import org.apereo.inspektr.audit.support.MaxAgeWhereClauseMatchCriteria;
 import org.apereo.inspektr.audit.support.WhereClauseMatchCriteria;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -88,7 +89,7 @@ public class CasJdbcAuditAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(name = "inspektrAuditEntityManagerFactory")
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
-        public FactoryBean<@NonNull EntityManagerFactory> inspektrAuditEntityManagerFactory(
+        public FactoryBean<EntityManagerFactory> inspektrAuditEntityManagerFactory(
             @Qualifier("jpaAuditTrailEntityFactory")
             final JpaEntityFactory<AuditTrailEntity> jpaAuditTrailEntityFactory,
             @Qualifier("inspektrAuditJpaVendorAdapter")
@@ -226,16 +227,17 @@ public class CasJdbcAuditAutoConfiguration {
     static class CasSupportJdbcAuditScheduleConfiguration {
 
         @ConditionalOnMissingBean(name = "inspektrAuditTrailCleaner")
+        @ConditionalOnMatchingHostname(name = "cas.audit.jdbc.schedule.enabled-on-host")
         @Bean
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         @Lazy(false)
         public Cleanable inspektrAuditTrailCleaner(
             final ConfigurableApplicationContext applicationContext,
-            @Qualifier("jdbcAuditTrailManager") final AuditTrailManager jdbcAuditTrailManager) {
+            @Qualifier("jdbcAuditTrailManager") final ObjectProvider<AuditTrailManager> jdbcAuditTrailManager) {
             return BeanSupplier.of(Cleanable.class)
                 .when(BeanCondition.on("cas.audit.jdbc.schedule.enabled").isTrue().evenIfMissing()
                     .given(applicationContext.getEnvironment()))
-                .supply(() -> new JdbcAuditTrailCleaner(jdbcAuditTrailManager))
+                .supply(() -> new JdbcAuditTrailCleaner(jdbcAuditTrailManager.getObject()))
                 .otherwiseProxy()
                 .get();
         }

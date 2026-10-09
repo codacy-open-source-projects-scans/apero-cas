@@ -1,6 +1,7 @@
 package org.apereo.cas.oidc.vc.issuer.nonce;
 
 import module java.base;
+import org.jspecify.annotations.Nullable;
 
 /**
  * This is {@link OidcVerifiableCredentialNonceService}.
@@ -25,8 +26,9 @@ public interface OidcVerifiableCredentialNonceService {
      * Consume nonce.
      *
      * @param nonce the nonce
+     * @return the count of removed nonces
      */
-    void remove(String nonce);
+    int remove(@Nullable String nonce);
 
     /**
      * Exists nonce?.
@@ -36,6 +38,14 @@ public interface OidcVerifiableCredentialNonceService {
      */
     boolean exists(String nonce);
 
-    record VerifiableCredentialNonce(String value, Instant expiresAt) {
+    /**
+     * Atomically consume a nonce so that it can never be presented twice.
+     *
+     * @param nonce the nonce
+     * @return true when this caller is the one that removed a valid nonce
+     */
+    boolean consume(@Nullable String nonce);
+
+    record VerifiableCredentialNonce(String value, Long expiresIn) {
     }
 }

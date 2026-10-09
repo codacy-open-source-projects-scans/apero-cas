@@ -6,18 +6,25 @@ const path = require("path");
 const os = require("os");
 
 (async () => {
+    await cas.log("Removing previous consent decisions for casuser");
+    await cas.doDelete("https://localhost:8443/cas/actuator/attributeConsent/casuser");
+    
     const browser = await cas.newBrowser(cas.browserOptions());
     const page = await cas.newPage(browser);
 
+    await cas.gotoLogout(page);
+    
     await cas.gotoLogin(page);
     await cas.loginWith(page);
 
     await cas.gotoLogin(page, "https://example.org");
+    await cas.sleep();
+    
     await cas.assertTextContent(page, "#content h2", "Attribute Consent");
     await cas.assertTextContent(page, "#appTitle", "The following attributes will be released to [https://example.org]:");
-    await cas.assertTextContent(page, "#first-name", "first-name");
+    await cas.assertTextContent(page, "#first-name", "Your First Name");
     await cas.assertTextContent(page, "#first-name-value", "[Apereo]");
-    await cas.assertTextContent(page, "#last-name", "last-name");
+    await cas.assertTextContent(page, "#last-name", "Your Last Name");
     await cas.assertTextContent(page, "#last-name-value", "[CAS]");
     await cas.assertTextContent(page, "#email", "email");
     await cas.assertTextContent(page, "#email-value", "[casuser@example.org]");

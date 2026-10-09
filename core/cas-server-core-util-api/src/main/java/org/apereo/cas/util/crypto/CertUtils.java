@@ -87,6 +87,34 @@ public class CertUtils {
     }
 
     /**
+     * Certificate chain without its trust anchor, as sent in an {@code x5c} header: a trailing
+     * self-issued certificate is dropped unless it is the only one, since a lone certificate is
+     * the signer itself.
+     *
+     * @param certificateChain the certificate chain, leaf first; may be null
+     * @return the chain without the trust anchor, possibly empty
+     */
+    public static List<X509Certificate> withoutTrustAnchor(final List<X509Certificate> certificateChain) {
+        if (certificateChain == null || certificateChain.isEmpty()) {
+            return List.of();
+        }
+        return certificateChain.size() > 1 && isSelfIssued(certificateChain.getLast())
+            ? List.copyOf(certificateChain.subList(0, certificateChain.size() - 1))
+            : List.copyOf(certificateChain);
+    }
+
+    /**
+     * Whether the certificate is self-issued, its subject and issuer being the same name, as a trust
+     * anchor or a self-signed certificate is.
+     *
+     * @param certificate the certificate
+     * @return true if self-issued
+     */
+    public static boolean isSelfIssued(final X509Certificate certificate) {
+        return certificate.getSubjectX500Principal().equals(certificate.getIssuerX500Principal());
+    }
+
+    /**
      * Gets a certificate factory for creating X.509 artifacts.
      *
      * @return X509 certificate factory.

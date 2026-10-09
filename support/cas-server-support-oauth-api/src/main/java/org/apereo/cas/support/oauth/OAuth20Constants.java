@@ -124,6 +124,23 @@ public interface OAuth20Constants {
     String BYPASS_APPROVAL_PROMPT = "bypass_approval_prompt";
 
     /**
+     * The authorization details parameter.
+     */
+    String AUTHORIZATION_DETAILS = "authorization_details";
+
+    /**
+     * The issuer_state is an opaque string value created by the Credential Issuer. It acts as a session identifier
+     * to bind the incoming authorization request back to a specific backend context or user session established during an earlier step.
+     */
+    String ISSUER_STATE = "issuer_state";
+
+    /**
+     * Parameter to indicate the approval key
+     * when checking for scope consent.
+     */
+    String SCOPES_APPROVAL_KEY = "approvalKey";
+
+    /**
      * The scope request.
      */
     String SCOPE = "scope";
@@ -234,9 +251,22 @@ public interface OAuth20Constants {
     String INVALID_DPOP_PROOF = "invalid_dpop_proof";
 
     /**
+     * The invalid token, per RFC 6750, section 3.1: the access token provided to a protected
+     * resource is expired, revoked, malformed, or invalid for other reasons. Unlike the errors
+     * above, which belong to the token endpoint, this one is answered with a 401 and a
+     * {@code WWW-Authenticate} challenge.
+     */
+    String INVALID_TOKEN = "invalid_token";
+
+    /**
      * The invalid scope.
      */
     String INVALID_SCOPE = "invalid_scope";
+
+    /**
+     * The invalid authorization details, per RFC 9396, section 5.
+     */
+    String INVALID_AUTHORIZATION_DETAILS = "invalid_authorization_details";
 
     /**
      * Access denied error.

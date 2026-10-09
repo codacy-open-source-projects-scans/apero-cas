@@ -152,7 +152,7 @@ public class CollectionUtils {
             LOGGER.trace("Converting multi-valued element [{}]", obj);
         } else if (obj instanceof final Map map) {
             val set = (Set<Map.Entry>) map.entrySet();
-            resultingSet.addAll(set.stream().map(e -> Pair.of(e.getKey(), e.getValue())).collect(Collectors.toSet()));
+            resultingSet.addAll(set.stream().map(e -> Couplet.of(e.getKey(), e.getValue())).collect(Collectors.toSet()));
         } else if (obj.getClass().isArray()) {
             if (obj instanceof byte[]) {
                 resultingSet.add(obj);
@@ -675,6 +675,22 @@ public class CollectionUtils {
                 return Pair.of(bits.getFirst(), bits.size() > 1 ? bits.get(1) : StringUtils.EMPTY);
             })
             .forEach(p -> mappings.put(p.getKey(), p.getValue()));
+        return mappings;
+    }
+
+    /**
+     * Convert directed list to multi value map.
+     *
+     * @param inputList the input list
+     * @return the map
+     */
+    public static Map<String, List<Object>> convertDirectedListToMultiValueMap(final Collection<String> inputList) {
+        val mappings = new TreeMap<String, List<Object>>();
+        inputList.forEach(value -> {
+            val bits = Splitter.on("->").splitToList(value);
+            val key = bits.getFirst();
+            mappings.put(key, List.copyOf(bits));
+        });
         return mappings;
     }
 

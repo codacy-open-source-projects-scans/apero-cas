@@ -1,4 +1,6 @@
-description = "Apereo CAS Ignite Integration"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Stores CAS tickets in Apache Ignite for shared single sign-on state across server nodes."
 
 ext {
     publishMetadata = true
@@ -14,7 +16,8 @@ dependencies {
     api project(":api:cas-server-core-api")
     api project(":api:cas-server-core-api-util")
     api project(":api:cas-server-core-api-ticket")
-
+    api project(":api:cas-server-core-api-ha")
+    
     implementation project(":core:cas-server-core-configuration-api")
     implementation project(":core:cas-server-core-tickets-api")
     implementation project(":core:cas-server-core-util-api")

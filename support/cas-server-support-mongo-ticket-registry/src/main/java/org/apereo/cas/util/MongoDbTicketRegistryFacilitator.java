@@ -5,7 +5,6 @@ import org.apereo.cas.configuration.model.support.mongo.ticketregistry.MongoDbTi
 import org.apereo.cas.mongo.MongoDbConnectionFactory;
 import org.apereo.cas.ticket.TicketCatalog;
 import org.apereo.cas.ticket.TicketDefinition;
-import org.apereo.cas.ticket.TicketGrantingTicket;
 import org.apereo.cas.ticket.registry.MongoDbTicketDocument;
 import com.mongodb.client.MongoCollection;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +33,8 @@ public class MongoDbTicketRegistryFacilitator {
     private static final String INDEX_NAME_ID = "IDX_ID";
     private static final String INDEX_NAME_PRINCIPAL = "IDX_PRINCIPAL";
     private static final String INDEX_NAME_EXPIRATION = "IDX_EXPIRATION";
+    private static final String INDEX_NAME_SERVICE = "IDX_SERVICE";
+    private static final String INDEX_NAME_ATTRIBUTES = "IDX_ATTRIBUTES";
 
     private final TicketCatalog ticketCatalog;
 
@@ -42,7 +43,9 @@ public class MongoDbTicketRegistryFacilitator {
     private final MongoDbTicketRegistryProperties properties;
     
     /**
-     * Create ticket collections.
+     * Create ticket collections. This honors {@code drop-collection} and {@code drop-indexes},
+     * both of which destroy data, so it must be invoked exactly once per application context and
+     * never from a refresh-scoped bean that is rebuilt on every configuration refresh.
      */
     public void createTicketCollections() {
         val definitions = ticketCatalog.findAll();
@@ -73,24 +76,33 @@ public class MongoDbTicketRegistryFacilitator {
                 expectedIndexes.add(ticketIdIndex);
             }
 
-            if (ticket.getApiClass().equals(TicketGrantingTicket.class)) {
-                if (properties.getIndexes().isEmpty() || properties.getIndexes().contains(INDEX_NAME_PRINCIPAL)) {
-                    val principalIdIndex = new Index()
-                        .on(MongoDbTicketDocument.FIELD_NAME_PRINCIPAL, Sort.Direction.ASC)
-                        .named(INDEX_NAME_PRINCIPAL);
-                    expectedIndexes.add(principalIdIndex);
-                }
+            if (properties.getIndexes().isEmpty() || properties.getIndexes().contains(INDEX_NAME_PRINCIPAL)) {
+                val principalIdIndex = new Index()
+                    .on(MongoDbTicketDocument.FIELD_NAME_PRINCIPAL, Sort.Direction.ASC)
+                    .named(INDEX_NAME_PRINCIPAL);
+                expectedIndexes.add(principalIdIndex);
             }
-            
+
             if (properties.getIndexes().isEmpty() || properties.getIndexes().contains(INDEX_NAME_EXPIRATION)) {
                 val expireIndex = new Index()
                     .named(INDEX_NAME_EXPIRATION)
-                    .on(MongoDbTicketDocument.FIELD_NAME_EXPIRE_AT, Sort.Direction.ASC);
-                val timeout = ticket.getProperties().getStorageTimeout();
-                if (timeout > 0 && timeout != Long.MAX_VALUE) {
-                    expireIndex.expire(Duration.ofSeconds(timeout));
-                }
+                    .on(MongoDbTicketDocument.FIELD_NAME_EXPIRE_AT, Sort.Direction.ASC)
+                    .expire(Duration.ZERO);
                 expectedIndexes.add(expireIndex);
+            }
+
+            if (properties.getIndexes().isEmpty() || properties.getIndexes().contains(INDEX_NAME_SERVICE)) {
+                val serviceIndex = new Index()
+                    .named(INDEX_NAME_SERVICE)
+                    .on(MongoDbTicketDocument.FIELD_NAME_SERVICE, Sort.Direction.ASC);
+                expectedIndexes.add(serviceIndex);
+            }
+
+            if (properties.getIndexes().isEmpty() || properties.getIndexes().contains(INDEX_NAME_ATTRIBUTES)) {
+                val attributeIndex = new Index()
+                    .named(INDEX_NAME_ATTRIBUTES)
+                    .on(MongoDbTicketDocument.FIELD_NAME_ATTRIBUTES + ".$**", Sort.Direction.ASC);
+                expectedIndexes.add(attributeIndex);
             }
 
             if (!expectedIndexes.isEmpty()) {

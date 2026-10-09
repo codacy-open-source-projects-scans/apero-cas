@@ -49,52 +49,24 @@
 
 ((root, factory) => {
     if (typeof define === 'function' && define.amd) {
-        define(["base64url"], factory);
+        define([], factory);
     } else if (typeof module === 'object' && module.exports) {
-        module.exports = factory(require("base64url"));
+        module.exports = factory();
     } else {
-        root.webauthn = factory(root.base64url);
+        root.webauthn = factory();
     }
-})(this, base64url => {
-
-    function extend(obj, more) {
-        return Object.assign({}, obj, more);
-    }
+})(this, () => {
 
     /**
-     * Create a WebAuthn credential.
-     *
-     * @param request: object - A PublicKeyCredentialCreationOptions object, except
-     *   where binary values are base64url encoded strings instead of byte arrays
-     *
-     * @return a PublicKeyCredentialCreationOptions suitable for passing as the
-     *   `publicKey` parameter to `navigator.credentials.create()`
+     * Turn the JSON form of PublicKeyCredentialCreationOptions sent by CAS, where binary values are
+     * base64url encoded strings, into the options expected by `navigator.credentials.create()`.
      */
     function decodePublicKeyCredentialCreationOptions(request) {
-        const excludeCredentials = request.excludeCredentials.map((credential) => extend(
-            credential, {
-                id: base64url.toByteArray(credential.id),
-            }));
-
-        const publicKeyCredentialCreationOptions = extend(
-            request, {
-                attestation: "direct",
-                user: extend(
-                    request.user, {
-                        id: base64url.toByteArray(request.user.id),
-                    }),
-                challenge: base64url.toByteArray(request.challenge),
-                excludeCredentials,
-            });
-
-        return publicKeyCredentialCreationOptions;
+        return PublicKeyCredential.parseCreationOptionsFromJSON(request);
     }
 
     /**
-     * Create a WebAuthn credential.
-     *
-     * @param request: object - A PublicKeyCredentialCreationOptions object, except
-     *   where binary values are base64url encoded strings instead of byte arrays
+     * Create a WebAuthn credential from the JSON form of PublicKeyCredentialCreationOptions.
      *
      * @return the Promise returned by `navigator.credentials.create`
      */
@@ -105,83 +77,32 @@
     }
 
     /**
-     * Perform a WebAuthn assertion.
-     *
-     * @param request: object - A PublicKeyCredentialRequestOptions object,
-     *   except where binary values are base64url encoded strings instead of byte
-     *   arrays
-     *
-     * @return a PublicKeyCredentialRequestOptions suitable for passing as the
-     *   `publicKey` parameter to `navigator.credentials.get()`
+     * Turn the JSON form of PublicKeyCredentialRequestOptions sent by CAS, where binary values are
+     * base64url encoded strings, into the options expected by `navigator.credentials.get()`.
      */
     function decodePublicKeyCredentialRequestOptions(request) {
-        const allowCredentials = request.allowCredentials && request.allowCredentials.map((credential) => extend(
-            credential, {
-                id: base64url.toByteArray(credential.id),
-            }));
-
-        const publicKeyCredentialRequestOptions = extend(
-            request, {
-                allowCredentials,
-                challenge: base64url.toByteArray(request.challenge),
-            });
-
-        return publicKeyCredentialRequestOptions;
+        return PublicKeyCredential.parseRequestOptionsFromJSON(request);
     }
 
     /**
-     * Perform a WebAuthn assertion.
-     *
-     *   except where binary values are base64url encoded strings instead of byte
-     *   arrays
+     * Perform a WebAuthn assertion from the JSON form of PublicKeyCredentialRequestOptions.
      *
      * @return the Promise returned by `navigator.credentials.get`
-     * @param request
      */
     function getAssertion(request) {
-        // console.log('Get assertion', request);
         return navigator.credentials.get({
             publicKey: decodePublicKeyCredentialRequestOptions(request),
         });
     }
 
-
-    /** Turn a PublicKeyCredential object into a plain object with base64url encoded binary values */
+    /**
+     * Turn a PublicKeyCredential into its JSON form, with base64url encoded binary values, transports,
+     * authenticator attachment and client extension results.
+     */
     function responseToObject(response) {
-        let clientExtensionResults = {};
-
-        try {
-            clientExtensionResults = response.getClientExtensionResults();
-        } catch (e) {
-            console.error('getClientExtensionResults failed', e);
-        }
-
-        if (response.response.attestationObject) {
-            return {
-                type: response.type,
-                id: response.id,
-                response: {
-                    attestationObject: base64url.fromByteArray(response.response.attestationObject),
-                    clientDataJSON: base64url.fromByteArray(response.response.clientDataJSON),
-                },
-                clientExtensionResults,
-            };
-        } else {
-            return {
-                type: response.type,
-                id: response.id,
-                response: {
-                    authenticatorData: base64url.fromByteArray(response.response.authenticatorData),
-                    clientDataJSON: base64url.fromByteArray(response.response.clientDataJSON),
-                    signature: base64url.fromByteArray(response.response.signature),
-                    userHandle: response.response.userHandle && base64url.fromByteArray(response.response.userHandle),
-                },
-                clientExtensionResults,
-            };
-        }
+        return response.toJSON();
     }
 
-    
     return {
         decodePublicKeyCredentialCreationOptions,
         decodePublicKeyCredentialRequestOptions,
@@ -212,23 +133,18 @@ function rejectIfNotSuccess(response) {
 }
 
 /**
- * Checks if the browser supports WebAuthn.
+ * Checks if the browser supports WebAuthn as these pages use it, including the WebAuthn Level 3 JSON
+ * serialization of credential options. This is a synchronous check so that callers can test its result
+ * directly; whether a platform authenticator exists is not checked, since security keys and phones work too.
  */
-async function isBrowserSupported(requirePlatformAuthenticator = true) {
-    if (!window.PublicKeyCredential) {
+function isBrowserSupported() {
+    const supported = window.PublicKeyCredential !== undefined
+        && typeof PublicKeyCredential.parseCreationOptionsFromJSON === "function"
+        && typeof PublicKeyCredential.parseRequestOptionsFromJSON === "function";
+    if (!supported) {
         console.error("WebAuthn is not supported in this browser.");
-        return false;
     }
-
-    if (requirePlatformAuthenticator) {
-        try {
-            return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-        } catch (error) {
-            console.error("Error checking for platform authenticator:", error);
-            return false;
-        }
-    }
-    return true;
+    return supported;
 }
 
 function updateSession(response) {
@@ -315,15 +231,51 @@ function hideDeviceInfo() {
     $("#registerDiscoverableCredentialButton").show();
 }
 
+/**
+ * Show the registered or authenticated device. The icon comes from attestation metadata and is shown only when
+ * that metadata provides one and it loads; otherwise the browser would draw a broken-image placeholder. Without a
+ * device name from the metadata, the credential nickname is shown instead.
+ */
 function showDeviceInfo(params) {
     $("#device-info").show();
-    $("#device-name").text(params.displayName);
-    $("#device-icon").attr("src", params.imageUrl);
+    $("#device-name").text(params.displayName || params.nickname || "");
+    const icon = $("#device-icon");
+    if (params.imageUrl) {
+        icon.off("error").one("error", () => icon.hide()).attr("src", params.imageUrl).show();
+    } else {
+        icon.removeAttr("src").hide();
+    }
     $("#registerButton").hide();
     $("#deviceNamePanel").hide();
 
     $("#registerDiscoverableCredentialButton").hide();
     $("#residentKeysPanel").hide();
+}
+
+/**
+ * Show the device that was just registered: the device named by attestation metadata when there is one, otherwise
+ * the passkey provider that CAS recognizes from the authenticator's AAGUID, and the credential nickname as a last resort.
+ */
+function showRegisteredDevice(data) {
+    const metadata = data.registration.attestationMetadata;
+    const provider = data.passkeyProvider || {};
+    showDeviceInfo(extend(
+        extend({displayName: provider.name, imageUrl: provider.icon}, metadata ? metadata.deviceProperties : {}),
+        {nickname: data.registration.credentialNickname}
+    ));
+}
+
+/**
+ * Show the device whose credential answered the authentication: the device named by attestation metadata when there
+ * is one, otherwise the passkey provider that CAS recognizes from the authenticator's AAGUID, and the credential
+ * nickname as a last resort.
+ */
+function showAuthenticatedDevice(data) {
+    const credentialId = data.response && data.response.credential ? data.response.credential.id : undefined;
+    const registration = (data.registrations || []).find(reg => reg.credential && reg.credential.credentialId === credentialId);
+    if (registration) {
+        showRegisteredDevice({registration, passkeyProvider: data.passkeyProvider});
+    }
 }
 
 function resetDisplays() {
@@ -450,6 +402,9 @@ function finishCeremony(response) {
     const finishUrl = `${window.location.origin}${contextPath}${urls.finish}`;
     return submitResponse(finishUrl, request, response)
         .then((data) => {
+            if (request.publicKeyCredentialRequestOptions) {
+                signalPasskeyState(request, data, response);
+            }
             if (data && data.success) {
                 setStatus(statusStrings.success);
             } else {
@@ -487,16 +442,7 @@ function register(username, displayName, credentialNickname, csrfToken,
             // console.log(`data: ${JSON.stringify(data)}`);
             clearMessages();
             if (data.registration) {
-                const nicknameInfo = {nickname: data.registration.credentialNickname};
-
-                if (data.registration && data.registration.attestationMetadata) {
-                    showDeviceInfo(extend(
-                        data.registration.attestationMetadata.deviceProperties,
-                        nicknameInfo
-                    ));
-                } else {
-                    showDeviceInfo(nicknameInfo);
-                }
+                showRegisteredDevice(data);
 
                 if (!data.attestationTrusted) {
                     addMessage("Attestation cannot be trusted.");
@@ -591,14 +537,10 @@ function authenticate(username = null, getRequest = getAuthenticateRequest) {
                     if (deviceProperties) {
                         addDeviceAttributeAsRow("Device Id", deviceProperties.deviceId);
                         addDeviceAttributeAsRow("Device Name", deviceProperties.displayName);
-
-                        showDeviceInfo({
-                            "displayName": deviceProperties.displayName,
-                            "imageUrl": deviceProperties.imageUrl
-                        })
                     }
                 }
             });
+            showAuthenticatedDevice(data);
 
             $("#authnButton").hide();
 
@@ -635,6 +577,158 @@ function authenticate(username = null, getRequest = getAuthenticateRequest) {
         addMessage(authFailDesc);
         return rejected(err);
     });
+}
+
+async function isConditionalMediationAvailable() {
+    try {
+        if (window.PublicKeyCredential === undefined) {
+            return false;
+        }
+        if (typeof window.PublicKeyCredential.getClientCapabilities === "function") {
+            const capabilities = await window.PublicKeyCredential.getClientCapabilities();
+            if (capabilities.conditionalGet !== undefined) {
+                return capabilities.conditionalGet === true;
+            }
+        }
+        return typeof window.PublicKeyCredential.isConditionalMediationAvailable === "function"
+            && await window.PublicKeyCredential.isConditionalMediationAvailable();
+    } catch (err) {
+        console.error("Unable to determine support for conditional mediation", err);
+        return false;
+    }
+}
+
+/**
+ * Tell the browser, through the WebAuthn Signal API, what CAS knows about the passkey that answered.
+ * When CAS reports the credential as unknown, the browser is asked to stop offering it. After a successful
+ * authentication, the browser learns which passkeys CAS still accepts for the user and what the user's current
+ * name is, so that passkeys removed from CAS stop being offered and renamed accounts show up to date. The name is the
+ * one the passkey was created with when that differs from the principal id, such as the username typed at login for a
+ * passkey upgrade, so that the password manager keeps showing the name it knows.
+ * Browsers without the Signal API ignore this.
+ */
+function signalPasskeyState(request, data, credential) {
+    if (window.PublicKeyCredential === undefined || !data) {
+        return;
+    }
+    const rpId = request.publicKeyCredentialRequestOptions.rpId;
+    if (!rpId) {
+        return;
+    }
+    const report = err => console.debug("WebAuthn signal was not delivered", err);
+    try {
+        if (data.unknownCredential) {
+            if (credential && typeof PublicKeyCredential.signalUnknownCredential === "function") {
+                PublicKeyCredential.signalUnknownCredential({
+                    rpId,
+                    credentialId: credential.id
+                }).catch(report);
+            }
+            return;
+        }
+        const registrations = data.success ? data.registrations : undefined;
+        const user = registrations && registrations.length > 0 ? registrations[0].userIdentity : undefined;
+        if (!user) {
+            return;
+        }
+        if (typeof PublicKeyCredential.signalAllAcceptedCredentials === "function") {
+            PublicKeyCredential.signalAllAcceptedCredentials({
+                rpId,
+                userId: user.id,
+                allAcceptedCredentialIds: registrations.map(reg => reg.credential.credentialId)
+            }).catch(report);
+        }
+        if (typeof PublicKeyCredential.signalCurrentUserDetails === "function") {
+            const used = credential ? registrations.find(reg => reg.credential && reg.credential.credentialId === credential.id) : undefined;
+            PublicKeyCredential.signalCurrentUserDetails({
+                rpId,
+                userId: user.id,
+                name: (used && used.userEntityName) || user.name,
+                displayName: user.displayName
+            }).catch(report);
+        }
+    } catch (err) {
+        report(err);
+    }
+}
+
+/**
+ * Authenticate with a discoverable passkey and submit the resulting session token with the given form.
+ * The request is made before anyone is authenticated, so it carries no allowed credentials and the
+ * passkey that answers decides who logs in. With mediation set to "conditional", the browser offers
+ * passkeys from the autofill menu of an input whose autocomplete attribute ends with "webauthn",
+ * and the returned promise stays pending until the user picks one.
+ */
+async function authenticateWithPasskey(form, mediation = undefined) {
+    const urls = await getWebAuthnUrls();
+    const params = await getAuthenticateRequest(urls, null);
+    const request = params.request;
+    const options = {
+        publicKey: webauthn.decodePublicKeyCredentialRequestOptions(request.publicKeyCredentialRequestOptions)
+    };
+    if (mediation !== undefined) {
+        options.mediation = mediation;
+    }
+    const credential = webauthn.responseToObject(await navigator.credentials.get(options));
+    const finishUrl = `${window.location.origin}${contextPath}${params.actions.finish}`;
+    const data = await submitResponse(finishUrl, request, credential);
+    signalPasskeyState(request, data, credential);
+    if (data && data.success && data.sessionToken) {
+        $(form).find("input[name=token]").val(data.sessionToken);
+        $(form).submit();
+    }
+    return data;
+}
+
+/**
+ * Offer a passkey to the user who just signed in with a password (WebAuthn conditional create). Where the browser
+ * reports the conditionalCreate capability, CAS starts a conditional registration named after the username typed at
+ * login, and the password manager that filled that password may create a passkey without a prompt; it refuses
+ * silently otherwise. Whatever happens, including errors and a ceremony that does not finish within the timeout,
+ * the given form is submitted so that the login continues.
+ */
+async function upgradeToPasskey(form, username, displayName, timeout = 5000) {
+    try {
+        if (isBrowserSupported() && typeof PublicKeyCredential.getClientCapabilities === "function") {
+            const capabilities = await PublicKeyCredential.getClientCapabilities();
+            if (capabilities.conditionalCreate === true) {
+                const urls = await getWebAuthnUrls();
+                const headers = {};
+                if (csrfToken !== undefined && csrfToken !== null) {
+                    headers["X-CSRF-TOKEN"] = csrfToken;
+                }
+                const response = await fetch(urls.register, {
+                    method: "POST",
+                    headers: headers,
+                    body: new URLSearchParams({
+                        username,
+                        displayName,
+                        conditional: true,
+                        requireResidentKey: true
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), timeout);
+                    try {
+                        const credential = await navigator.credentials.create({
+                            publicKey: webauthn.decodePublicKeyCredentialCreationOptions(data.request.publicKeyCredentialCreationOptions),
+                            mediation: "conditional",
+                            signal: controller.signal
+                        });
+                        const finishUrl = `${window.location.origin}${contextPath}${data.actions.finish}`;
+                        await submitResponse(finishUrl, data.request, webauthn.responseToObject(credential));
+                    } finally {
+                        clearTimeout(timer);
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.debug("Passkey upgrade did not complete", err);
+    }
+    $(form).submit();
 }
 
 function init() {

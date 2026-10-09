@@ -8,11 +8,13 @@ import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.ticket.BaseOAuth20Token;
 import org.apereo.cas.ticket.ExpirationPolicy;
 import org.apereo.cas.ticket.Ticket;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.annotation.Nulls;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An OAuth access token implementation.
@@ -28,11 +30,21 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
 
     @Setter
     @Getter
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<String> credentialConfigurationIds;
+    
+    @Setter
+    @Getter
     private String idToken;
 
     @Getter
     private String token;
 
+    @Getter
+    @Setter
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<? extends Serializable> authorizationDetails;
+    
     public OAuth20DefaultAccessToken(final String id,
                                      final Service service,
                                      final Authentication authentication,
@@ -41,18 +53,20 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
                                      final String token,
                                      @JsonSetter(nulls = Nulls.AS_EMPTY)
                                      final Collection<String> scopes,
-                                     final String codeChallenge,
-                                     final String codeChallengeMethod,
+                                     @Nullable final String codeChallenge,
+                                     @Nullable final String codeChallengeMethod,
                                      final String clientId,
                                      @JsonSetter(nulls = Nulls.AS_EMPTY)
                                      final Map<String, Map<String, Object>> requestClaims,
                                      final OAuth20ResponseTypes responseType,
-                                     final OAuth20GrantTypes grantType) {
+                                     final OAuth20GrantTypes grantType,
+                                     final List<? extends Serializable> authorizationDetails) {
         super(id, service, authentication, expirationPolicy,
             ticketGrantingTicket, scopes,
             codeChallenge, codeChallengeMethod,
             clientId, requestClaims, responseType, grantType);
         this.token = token;
+        this.authorizationDetails = authorizationDetails;
     }
 
     public OAuth20DefaultAccessToken(final String id,
@@ -67,10 +81,12 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
                                      @JsonSetter(nulls = Nulls.AS_EMPTY)
                                      final Map<String, Map<String, Object>> requestClaims,
                                      final OAuth20ResponseTypes responseType,
-                                     final OAuth20GrantTypes grantType) {
+                                     final OAuth20GrantTypes grantType,
+                                     final List<? extends Serializable> authorizationDetails) {
         this(id, service, authentication, expirationPolicy,
             ticketGrantingTicket, token, scopes, null,
-            null, clientId, requestClaims, responseType, grantType);
+            null, clientId, requestClaims, responseType,
+            grantType, authorizationDetails);
     }
 
     @Override

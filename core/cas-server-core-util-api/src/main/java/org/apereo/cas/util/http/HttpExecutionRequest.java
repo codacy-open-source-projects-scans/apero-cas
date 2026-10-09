@@ -8,8 +8,8 @@ import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.SuperBuilder;
 import lombok.With;
-import lombok.experimental.SuperBuilder;
 import org.apache.commons.lang3.StringUtils;
 import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpMethod;
@@ -50,14 +50,27 @@ public class HttpExecutionRequest {
     @Builder.Default
     private final int maximumRetryAttempts = 3;
 
+    /**
+     * Maximum buffered response size in bytes. Zero or less uses the global default from
+     * {@code org.apereo.cas.util.http.HttpRequestUtils.maximumResponseSize} (256 MiB).
+     */
+    @Builder.Default
+    private final long maximumResponseSize = 0;
+
     @Builder.Default
     private final Map<String, String> parameters = new LinkedHashMap<>();
 
     @Builder.Default
     private final Map<String, String> headers = new LinkedHashMap<>();
 
+    @Builder.Default
+    private final Map<String, InetAddress[]> resolvedAddresses = new LinkedHashMap<>();
+
+    @Builder.Default
+    private final boolean redirectsEnabled = true;
+
     /**
-     * Is basic authentication?
+     * Determines whether this request uses basic authentication.
      *
      * @return true/false
      */
@@ -66,7 +79,7 @@ public class HttpExecutionRequest {
     }
 
     /**
-     * Is bearer authentication?
+     * Determines whether this request uses bearer authentication.
      *
      * @return true/false
      */

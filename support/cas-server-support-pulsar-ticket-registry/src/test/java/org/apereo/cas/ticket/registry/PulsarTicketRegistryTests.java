@@ -2,17 +2,20 @@ package org.apereo.cas.ticket.registry;
 
 import module java.base;
 import org.apereo.cas.config.CasPulsarTicketRegistryAutoConfiguration;
+import org.apereo.cas.ha.ClusterTopologyManager;
 import org.apereo.cas.util.crypto.CipherExecutor;
 import org.apereo.cas.util.junit.EnabledIfListeningOnPort;
 import lombok.Getter;
+import lombok.val;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.pulsar.autoconfigure.PulsarAutoConfiguration;
 import org.springframework.test.context.TestPropertySource;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * This is {@link PulsarTicketRegistryTests}.
@@ -32,7 +35,7 @@ import org.springframework.test.context.TestPropertySource;
 @Tag("Pulsar")
 @EnabledIfListeningOnPort(port = 6650)
 @Getter
-@Execution(ExecutionMode.SAME_THREAD)
+@ResourceLock("ticketRegistry:pulsar")
 class PulsarTicketRegistryTests extends BaseTicketRegistryTests {
     @Autowired
     @Qualifier(TicketRegistry.BEAN_NAME)
@@ -42,9 +45,18 @@ class PulsarTicketRegistryTests extends BaseTicketRegistryTests {
     @Qualifier(CipherExecutor.BEAN_NAME_TICKET_REGISTRY_CIPHER_EXECUTOR)
     private CipherExecutor messageQueueCipherExecutor;
 
+    @Autowired
+    @Qualifier("ticketRegistryPulsarClusterTopologyManager")
+    private ClusterTopologyManager ticketRegistryPulsarClusterTopologyManager;
+
     @Override
     protected CipherExecutor setupCipherExecutor() {
         return this.messageQueueCipherExecutor;
     }
 
+    @RepeatedTest(1)
+    void verifyOperation() throws Exception {
+        val results = ticketRegistryPulsarClusterTopologyManager.discoverMembers();
+        assertFalse(results.isEmpty());
+    }
 }

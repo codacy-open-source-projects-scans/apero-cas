@@ -4,6 +4,7 @@ import module java.base;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.text.WordUtils;
+import org.springframework.http.MediaType;
 
 /**
  * This is {@link OidcConstants}.
@@ -17,10 +18,6 @@ public interface OidcConstants {
      * User code parameter in CIBA requests.
      */
     String USER_CODE = "user_code";
-    /**
-     * ACR values specified in CIBA requests.
-     */
-    String ACR_VALUES = "acr_values";
     /**
      * Binding message specified in CIBA requests.
      */
@@ -53,10 +50,31 @@ public interface OidcConstants {
      * Authentication method reference passed in the ID token.
      */
     String AMR = "amr";
+
+    /**
+     * JTI claim.
+     */
+    String JTI = "jti";
+    /**
+     * Issued at claim.
+     */
+    String IAT = "iat";
+    /**
+     * Not before claim.
+     */
+    String NBF = "nbf";
     /**
      * Audience claim.
      */
     String AUD = "aud";
+    /**
+     * JWKS claim.
+     */
+    String JWKS = "jwks";
+    /**
+     * Keys claim.
+     */
+    String KEYS = "keys";
     /**
      * VC pre authorized code parameter.
      */
@@ -180,6 +198,22 @@ public interface OidcConstants {
      */
     String VC_CREDENTIAL_URL = "oidcVcCredential";
     /**
+     * OIDC VC presentation request path segment.
+     */
+    String VC_PRESENTATION_REQUEST_URL = "oidcVcPresentationRequest";
+    /**
+     * OIDC VC presentation response path segment.
+     */
+    String VC_PRESENTATION_RESPONSE_URL = "oidcVcPresentationResponse";
+    /**
+     * OIDC VC presentation result path segment, polled by the relying party that created the request.
+     */
+    String VC_PRESENTATION_RESULT_URL = "oidcVcPresentationResult";
+    /**
+     * Oidc VC credential type url path segment.
+     */
+    String VC_CREDENTIAL_TYPE_URL = "oidcVcCredentialType";
+    /**
      * Oidc VC credential offer url path segment.
      */
     String VC_CREDENTIAL_OFFER_URL = "oidcVcCredentialOffer";
@@ -191,6 +225,34 @@ public interface OidcConstants {
      * Oidc VC nonce url path segment.
      */
     String VC_NONCE_URL = "oidcVcNonce";
+    /**
+     * Credential error response: the credential request is invalid.
+     * OpenID4VCI 1.0 defines its own error codes for the Credential Endpoint; the OAuth codes of the
+     * token endpoint do not apply there.
+     */
+    String VC_ERROR_INVALID_CREDENTIAL_REQUEST = "invalid_credential_request";
+    /**
+     * Credential error response: the issuer does not support the requested credential type.
+     */
+    String VC_ERROR_UNSUPPORTED_CREDENTIAL_TYPE = "unsupported_credential_type";
+    /**
+     * Credential error response: the issuer does not support the requested credential format.
+     */
+    String VC_ERROR_UNSUPPORTED_CREDENTIAL_FORMAT = "unsupported_credential_format";
+    /**
+     * Credential error response: the proof in the credential request is invalid.
+     */
+    String VC_ERROR_INVALID_PROOF = "invalid_proof";
+    /**
+     * Credential error response: the nonce in the proof is invalid or expired. A wallet that sees
+     * this asks the nonce endpoint for a fresh nonce and retries, which is why it has to be
+     * distinguishable from a proof that is wrong for any other reason.
+     */
+    String VC_ERROR_INVALID_NONCE = "invalid_nonce";
+    /**
+     * Credential error response: the issuer denies issuance of the requested credential.
+     */
+    String VC_ERROR_CREDENTIAL_REQUEST_DENIED = "credential_request_denied";
     /**
      * Oidc pushed authorization request url path segment url.
      */
@@ -262,9 +324,21 @@ public interface OidcConstants {
      */
     String WELL_KNOWN_OPENID_CREDENTIAL_ISSUER_URL = WELL_KNOWN_URL + "/openid-credential-issuer";
     /**
+     * .well-known/jwt-vc-issuer path url, the JWT VC Issuer Metadata of SD-JWT VC.
+     */
+    String WELL_KNOWN_JWT_VC_ISSUER_URL = WELL_KNOWN_URL + "/jwt-vc-issuer";
+    /**
      * .well-known/oauth-authorization-server path url.
      */
     String WELL_KNOWN_OAUTH_AUTHORIZATION_SERVER_URL = WELL_KNOWN_URL + "/oauth-authorization-server";
+    /**
+     * /fetch federation URL.
+     */
+    String FETCH_FEDERATION_URL = "/fetch";
+    /**
+     * /list federation URL.
+     */
+    String LIST_FEDERATION_URL = "/list";
     /**
      * Scope assigned to access token internally
      * to access client config urls and look up relying parties.
@@ -288,6 +362,10 @@ public interface OidcConstants {
      */
     String CONTENT_TYPE_JWT = "application/jwt";
     /**
+     * Entity statement content type.
+     */
+    MediaType ENTITY_STATEMENT_CONTENT_TYPE = new MediaType("application", "entity-statement+jwt");
+    /**
      * The post logout redirect uri.
      */
     String POST_LOGOUT_REDIRECT_URI = "post_logout_redirect_uri";
@@ -298,7 +376,11 @@ public interface OidcConstants {
     /**
      * Verifiable credentials nonce expiration.
      */
-    String C_NONCE_EXPIRES_AT = "c_nonce_expires_at";
+    String C_NONCE_EXPIRES_IN = "c_nonce_expires_in";
+    /**
+     * Unsupported parameter error.
+     */
+    String UNSUPPORTED_PARAMETER = "unsupported_parameter";
 
     /**
      * Standard openid connect scopes.
@@ -344,10 +426,10 @@ public interface OidcConstants {
         OFFLINE_ACCESS("offline_access");
 
         private final String scope;
-
-
+        
         public String getFriendlyName() {
             return WordUtils.capitalize(this.scope.replace('_', ' '));
         }
     }
+    
 }

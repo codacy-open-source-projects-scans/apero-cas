@@ -35,6 +35,7 @@ import lombok.val;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.BooleanUtils;
+import org.apache.commons.lang3.CharUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Strings;
@@ -57,6 +58,7 @@ import org.springframework.webflow.execution.Event;
 import org.springframework.webflow.execution.RequestContext;
 import org.springframework.webflow.execution.RequestContextHolder;
 import org.springframework.webflow.test.MockRequestContext;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -429,6 +431,20 @@ public class WebUtils {
     }
 
     /**
+     * Gets credential from.
+     *
+     * @param context the context
+     * @return the credential from
+     */
+    public @Nullable Credential getCredentialFrom(final RequestContext context) {
+        return Optional.ofNullable((Credential) context.getRequestScope().get(PARAMETER_CREDENTIAL))
+            .or(() -> Optional.ofNullable((Credential) context.getFlashScope().get(PARAMETER_CREDENTIAL)))
+            .or(() -> Optional.ofNullable((Credential) context.getFlowScope().get(PARAMETER_CREDENTIAL)))
+            .or(() -> Optional.ofNullable((Credential) context.getConversationScope().get(PARAMETER_CREDENTIAL)))
+            .orElse(null);
+    }
+    
+    /**
      * Gets credential.
      *
      * @param <T>     the type parameter
@@ -448,7 +464,7 @@ public class WebUtils {
         }
         return (T) credential;
     }
-
+    
     /**
      * Gets credential from the context.
      *
@@ -523,7 +539,7 @@ public class WebUtils {
     }
 
     /**
-     * Is authenticating at a public workstation?
+     * Determines whether authentication is occurring at a public workstation.
      *
      * @param ctx the ctx
      * @return true if the cookie value is present
@@ -886,7 +902,7 @@ public class WebUtils {
      * @param context the context
      * @param service the service
      */
-    public static void putLogoutRedirectUrl(final RequestContext context, final String service) {
+    public static void putLogoutRedirectUrl(final RequestContext context, @Nullable final String service) {
         context.getFlowScope().put("logoutRedirectUrl", service);
     }
 
@@ -1820,6 +1836,43 @@ public class WebUtils {
      */
     public static BrowserStorage getBrowserStorage(final RequestContext requestContext) {
         return requestContext.getFlowScope().get(BrowserStorage.PARAMETER_BROWSER_STORAGE, BrowserStorage.class);
+    }
+
+    /**
+     * Expire the cookies {@code cas.js} writes for the given browser storage context
+     * when local or session storage is unavailable. Cookie names encode the context
+     * the same way {@code encodeBrowserStorageCookieToken} does in {@code cas.js}.
+     *
+     * @param request  the request
+     * @param response the response
+     * @param context  the browser storage context key
+     */
+    public static void removeBrowserStorageCookies(final HttpServletRequest request,
+                                                   final HttpServletResponse response,
+                                                   final String context) {
+        val cookies = request.getCookies();
+        if (cookies != null) {
+            val encodedContext = new StringBuilder();
+            for (val current : context.getBytes(StandardCharsets.UTF_8)) {
+                val character = (char) Byte.toUnsignedInt(current);
+                if (CharUtils.isAsciiAlphanumeric(character) || "-.~".indexOf(character) >= 0) {
+                    encodedContext.append(character);
+                } else {
+                    encodedContext.append('%').append(HexFormat.of().withUpperCase().toHexDigits(current));
+                }
+            }
+            val prefix = BrowserStorage.COOKIE_NAME_PREFIX + encodedContext + '_';
+            val path = StringUtils.defaultIfBlank(request.getContextPath(), "/");
+            Arrays.stream(cookies)
+                .filter(cookie -> cookie.getName().startsWith(prefix))
+                .forEach(cookie -> {
+                    val expired = new Cookie(cookie.getName(), StringUtils.EMPTY);
+                    expired.setPath(path);
+                    expired.setMaxAge(0);
+                    expired.setSecure(request.isSecure());
+                    response.addCookie(expired);
+                });
+        }
     }
 
     /**

@@ -1,0 +1,1044 @@
+package org.apereo.cas.vc.presentation;
+
+import module java.base;
+import org.apereo.cas.configuration.CasConfigurationProperties;
+import org.apereo.cas.configuration.model.support.oidc.OidcVerifiableCredentialConfigurationProperties;
+import org.apereo.cas.configuration.model.support.oidc.OidcVerifiableCredentialsPresentationProperties;
+import org.apereo.cas.configuration.model.support.oidc.OidcVerifiableCredentialsPresentationProperties.ClientIdentifierPrefixes;
+import org.apereo.cas.oidc.OidcConfigurationContext;
+import org.apereo.cas.oidc.OidcConstants;
+import org.apereo.cas.support.oauth.OAuth20Constants;
+import org.apereo.cas.support.oauth.util.OAuth20Utils;
+import org.apereo.cas.support.oauth.web.endpoints.BaseOAuth20Controller;
+import org.apereo.cas.ticket.TransientSessionTicket;
+import org.apereo.cas.ticket.TransientSessionTicketFactory;
+import org.apereo.cas.util.CollectionUtils;
+import org.apereo.cas.util.LoggingUtils;
+import org.apereo.cas.util.crypto.CertUtils;
+import org.apereo.cas.util.function.FunctionUtils;
+import org.apereo.cas.util.serialization.JacksonObjectMapperFactory;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.SuperBuilder;
+import lombok.extern.jackson.Jacksonized;
+import lombok.extern.slf4j.Slf4j;
+import lombok.val;
+import org.apache.commons.lang3.StringUtils;
+import org.jose4j.jwe.KeyManagementAlgorithmIdentifiers;
+import org.jose4j.jwk.EcJwkGenerator;
+import org.jose4j.jwk.EllipticCurveJsonWebKey;
+import org.jose4j.jwk.JsonWebKey;
+import org.jose4j.jwk.JsonWebKeySet;
+import org.jose4j.jwk.PublicJsonWebKey;
+import org.jose4j.jwk.Use;
+import org.jose4j.jws.AlgorithmIdentifiers;
+import org.jose4j.jws.JsonWebSignature;
+import org.jose4j.jwt.JwtClaims;
+import org.jose4j.jwt.NumericDate;
+import org.jose4j.keys.EllipticCurves;
+import org.jspecify.annotations.Nullable;
+import org.pac4j.jee.context.JEEContext;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import tools.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import java.security.cert.X509Certificate;
+
+/**
+ * This is {@link OidcVerifiableCredentialPresentationRequestEndpointController}.
+ *
+ * @author Misagh Moayyed
+ * @since 8.1.0
+ */
+@Tag(name = "OpenID Connect")
+@Slf4j
+public class OidcVerifiableCredentialPresentationRequestEndpointController extends BaseOAuth20Controller<OidcConfigurationContext> {
+    /**
+     * Media type of a request object served by reference, per OpenID4VP 1.0 section 5.10.
+     * It is set on the response rather than declared as a mapping's produces condition, so that
+     * a wallet sending a narrower Accept header is still served instead of being refused.
+     */
+    private static final MediaType REQUEST_OBJECT_MEDIA_TYPE = MediaType.parseMediaType("application/oauth-authz-req+jwt");
+
+    /**
+     * Type header every request object must carry, per RFC 9101. Wallets reject request
+     * objects that do not declare it.
+     */
+    private static final String REQUEST_OBJECT_JWT_TYPE = "oauth-authz-req+jwt";
+
+    /**
+     * Audience of a request object when the wallet was not discovered dynamically,
+     * per OpenID4VP 1.0.
+     */
+    private static final String STATIC_DISCOVERY_AUDIENCE = "https://self-issued.me/v2";
+
+    private static final String DIGITAL_CREDENTIALS_PROTOCOL_UNSIGNED = "openid4vp-v1-unsigned";
+
+    private static final String DIGITAL_CREDENTIALS_PROTOCOL_SIGNED = "openid4vp-v1-signed";
+
+    private static final int SUBJECT_ALTERNATIVE_NAME_DNS = 2;
+
+    private static final String CLAIM_ID_PREFIX = "claim-";
+
+    private static final ObjectMapper MAPPER = JacksonObjectMapperFactory.builder()
+        .defaultTypingEnabled(false).minimal(true).build().toObjectMapper();
+
+    public OidcVerifiableCredentialPresentationRequestEndpointController(
+        final OidcConfigurationContext configurationContext) {
+        super(configurationContext);
+    }
+
+    /**
+     * The client identifier CAS presents to wallets as the verifier, carrying the OpenID4VP
+     * client identifier prefix that tells the wallet how to authenticate it. The wallet echoes
+     * this value as the key binding audience, so the presentation response endpoint resolves
+     * the expected audience through this same method. Under {@code x509_hash} it is the
+     * base64url-encoded SHA-256 hash of the DER-encoded leaf certificate of the OpenID Connect
+     * signing key (OpenID4VP 1.0 section 5.9.3).
+     *
+     * @param configurationContext the configuration context
+     * @return the client identifier
+     */
+    public static String resolveClientIdentifier(final OidcConfigurationContext configurationContext) {
+        val casProperties = configurationContext.getCasProperties();
+        val responseUri = resolveResponseUri(casProperties);
+        val prefix = casProperties.getAuthn().getOidc().getVc().getPresentation().getClientIdentifierPrefix();
+        val identifier = switch (prefix) {
+            case X509_SAN_DNS -> URI.create(responseUri).getHost();
+            case X509_HASH -> OAuth20Utils.computeCertificateThumbprint(resolveCertificateChain(FunctionUtils.doUnchecked(
+                () -> configurationContext.getIdTokenSigningAndEncryptionService().getJsonWebKeySigningKey(Optional.empty()))).getFirst());
+            case REDIRECT_URI -> responseUri;
+        };
+        return prefix.getValue() + ':' + identifier;
+    }
+
+    /**
+     * Certificate chain of the OpenID Connect signing key, which both {@code x509} client identifier prefixes need
+     * to sign the request object. Failing here produces a configuration error rather than a request object every
+     * wallet silently rejects.
+     *
+     * @param signingKey the signing key
+     * @return the certificate chain, leaf first
+     */
+    protected static List<X509Certificate> resolveCertificateChain(final @Nullable PublicJsonWebKey signingKey) {
+        val certificateChain = signingKey == null ? null : signingKey.getCertificateChain();
+        if (certificateChain == null || certificateChain.isEmpty()) {
+            throw new IllegalStateException("The OpenID Connect signing key carries no certificate chain, which the "
+                + "x509 client identifier prefixes require");
+        }
+        return certificateChain;
+    }
+
+    /**
+     * Resolve response uri.
+     *
+     * @param casProperties the CAS properties
+     * @return the response uri
+     */
+    public static String resolveResponseUri(final CasConfigurationProperties casProperties) {
+        return casProperties.getAuthn().getOidc().getCore().getIssuer()
+            + '/' + OidcConstants.VC_PRESENTATION_RESPONSE_URL;
+    }
+
+    /**
+     * Serve the authorization request object by reference.
+     * <p>
+     * OpenID4VP 1.0 requires the request URI response to be a signed request object served as
+     * {@code application/oauth-authz-req+jwt}. A request cannot be signed under the
+     * {@code redirect_uri} client identifier prefix, because the wallet has no way to obtain a
+     * trusted key for it; in that mode CAS never advertises a request URI and this endpoint
+     * has nothing to serve.
+     *
+     * @param requestId    the request id
+     * @param httpRequest  the http request
+     * @param httpResponse the http response
+     * @return the response entity
+     * @throws Throwable the throwable
+     */
+    @GetMapping(value = {
+        '/' + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.VC_PRESENTATION_REQUEST_URL + "/{requestId}",
+        "/**/" + OidcConstants.VC_PRESENTATION_REQUEST_URL + "/{requestId}"
+    })
+    @Operation(summary = "Fetch an OIDC verifiable credential presentation request object",
+        description = "Serves the signed authorization request object for a presentation request")
+    public ResponseEntity<String> fetchRequest(
+        @PathVariable final String requestId,
+        final HttpServletRequest httpRequest,
+        final HttpServletResponse httpResponse) throws Throwable {
+
+        if (!isRequestObjectSigned()) {
+            LOGGER.warn("Presentation requests are not signed and are passed to the wallet by value; "
+                + "no request object can be served by reference under the [{}] client identifier prefix.",
+                ClientIdentifierPrefixes.REDIRECT_URI.getValue());
+            return ResponseEntity.notFound().build();
+        }
+
+        val transientSessionTicket = configurationContext.getTicketRegistry().getTicket(requestId, TransientSessionTicket.class);
+        Objects.requireNonNull(transientSessionTicket, () -> "No request could be found for the given request id: " + requestId);
+
+        val requestObject = signAuthorizationRequest(
+            buildAuthorizationRequestParameters(transientSessionTicket), transientSessionTicket);
+        return ResponseEntity
+            .ok()
+            .contentType(REQUEST_OBJECT_MEDIA_TYPE)
+            .cacheControl(CacheControl.noStore())
+            .body(requestObject);
+    }
+
+    /**
+     * Collect the outcome of a presentation request.
+     * <p>
+     * The wallet posts its presentation to the response endpoint and is told there whether it verified.
+     * The relying party that created the request is not party to that exchange, so this is where it
+     * learns the outcome and the claims that were disclosed to it. A request that has not been answered
+     * yet reports {@code pending}. A wallet's error response does not end the request, since nothing
+     * authenticates it: the request reports {@code pending} until it expires, and only then {@code error} with
+     * the wallet's {@code error} and {@code error_description}, unless a valid presentation arrived meanwhile,
+     * which takes precedence and discards the error. An outcome that was collected, or a request that expired
+     * unanswered, is gone.
+     * Only the client that created the request may collect it, and a same-device outcome also requires the
+     * {@code response_code} the wallet delivered to the relying party's redirect URI; anything else is {@code 404}.
+     *
+     * @param requestId    the request id returned when the presentation request was created
+     * @param responseCode the response code delivered to the relying party's redirect URI, for a same-device flow
+     * @param httpRequest  the http request
+     * @param httpResponse the http response
+     * @return the response entity
+     */
+    @GetMapping(value = {
+        '/' + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.VC_PRESENTATION_RESULT_URL,
+        "/**/" + OidcConstants.VC_PRESENTATION_RESULT_URL
+    }, produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Collect the outcome of an OIDC verifiable credential presentation request",
+        parameters = {
+            @Parameter(name = "requestId", description = "The presentation request id"),
+            @Parameter(name = "response_code", description = "The response code the wallet delivered to the relying party's redirect URI")
+        })
+    public ResponseEntity<Map<String, Object>> fetchResult(
+        @RequestParam("requestId") final String requestId,
+        @RequestParam(value = "response_code", required = false) final @Nullable String responseCode,
+        final HttpServletRequest httpRequest,
+        final HttpServletResponse httpResponse) {
+
+        val clientId = resolveAuthenticatedClientId(httpRequest, httpResponse);
+        val errorId = OidcVerifiableCredentialPresentationResponseEndpointController.resolvePresentationErrorId(requestId);
+        val result = findPresentationOutcome(
+            OidcVerifiableCredentialPresentationResponseEndpointController.resolvePresentationResultId(requestId));
+        if (result != null) {
+            FunctionUtils.doAndHandle(_ -> configurationContext.getTicketRegistry().deleteTicket(errorId));
+            return collectPresentationOutcome(result, clientId, requestId, responseCode);
+        }
+        val pending = FunctionUtils.doAndHandle(
+            () -> configurationContext.getTicketRegistry().getTicket(requestId, TransientSessionTicket.class));
+        if (pending != null && !pending.isExpired()) {
+            return clientId.equals(pending.getPropertyAsString(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_CLIENT_ID))
+                ? ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("status", "pending"))
+                : ResponseEntity.notFound().build();
+        }
+        val error = findPresentationOutcome(errorId);
+        return error != null
+            ? collectPresentationOutcome(error, clientId, requestId, responseCode)
+            : ResponseEntity.notFound().build();
+    }
+
+    private @Nullable TransientSessionTicket findPresentationOutcome(final String outcomeId) {
+        val outcome = FunctionUtils.doAndHandle(
+            () -> configurationContext.getTicketRegistry().getTicket(outcomeId, TransientSessionTicket.class));
+        return outcome != null && !outcome.isExpired() ? outcome : null;
+    }
+
+    /**
+     * Release a recorded outcome to the client that created the request, against the response code for a
+     * same-device flow, and remove it so it is delivered once.
+     *
+     * @param outcome      the recorded outcome
+     * @param clientId     the authenticated client id
+     * @param requestId    the presentation request id
+     * @param responseCode the response code presented, if any
+     * @return the response entity
+     */
+    protected ResponseEntity<Map<String, Object>> collectPresentationOutcome(final TransientSessionTicket outcome,
+                                                                              final String clientId,
+                                                                              final String requestId,
+                                                                              final @Nullable String responseCode) {
+        val ticketClientId = outcome.getPropertyAsString(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_CLIENT_ID);
+        val ticketResponseCode = outcome.getPropertyAsString(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_RESPONSE_CODE);
+        if (!clientId.equals(ticketClientId) || !isResponseCodeValid(ticketResponseCode, responseCode)) {
+            LOGGER.warn("Client [{}] may not collect the outcome of presentation request [{}]", clientId, requestId);
+            return ResponseEntity.notFound().build();
+        }
+        val body = new LinkedHashMap<String, Object>();
+        body.put("status", Objects.requireNonNull(outcome.getPropertyAsString("status")));
+        val claims = outcome.getProperty("claims", Map.class);
+        if (claims != null) {
+            body.put("claims", claims);
+        }
+        val error = outcome.getPropertyAsString(OAuth20Constants.ERROR);
+        if (error != null) {
+            body.put(OAuth20Constants.ERROR, error);
+        }
+        val errorDescription = outcome.getPropertyAsString(OAuth20Constants.ERROR_DESCRIPTION);
+        if (errorDescription != null) {
+            body.put(OAuth20Constants.ERROR_DESCRIPTION, errorDescription);
+        }
+        FunctionUtils.doAndHandle(_ -> configurationContext.getTicketRegistry().deleteTicket(outcome));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(body);
+    }
+
+    /**
+     * A same-device outcome is released only against the response code the wallet delivered to the relying
+     * party's redirect URI; a cross-device outcome carries no code and needs none.
+     *
+     * @param expectedResponseCode the response code recorded with the outcome, if any
+     * @param responseCode         the response code presented
+     * @return true if the outcome may be released
+     */
+    protected static boolean isResponseCodeValid(final @Nullable String expectedResponseCode,
+                                                 final @Nullable String responseCode) {
+        return expectedResponseCode == null || (responseCode != null
+            && MessageDigest.isEqual(expectedResponseCode.getBytes(StandardCharsets.UTF_8), responseCode.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /**
+     * Handle and create response entity.
+     *
+     * @param request      the request
+     * @param httpRequest  the http request
+     * @param httpResponse the http response
+     * @return the response entity
+     * @throws Throwable the throwable
+     */
+    @PostMapping(value = {
+        '/' + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.VC_PRESENTATION_REQUEST_URL,
+        "/**/" + OidcConstants.VC_PRESENTATION_REQUEST_URL
+    }, consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Handle OIDC verifiable credential presentation request",
+        description = "Handles requests for OIDC verifiable credential presentation issuance")
+    public ResponseEntity handle(
+        @Valid @RequestBody final OidcVerifiableCredentialPresentationRequest request,
+        final HttpServletRequest httpRequest,
+        final HttpServletResponse httpResponse) throws Throwable {
+
+        val clientId = resolveAuthenticatedClientId(httpRequest, httpResponse);
+        val responseMode = resolveResponseMode(request);
+        val origin = responseMode.isDigitalCredentialsApi() ? verifyOrigin(request, clientId) : null;
+        val redirectUri = request.getRedirectUri();
+        if (StringUtils.isNotBlank(redirectUri)) {
+            val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientId);
+            if (registeredService == null || redirectUri.contains("#") || !OAuth20Utils.checkCallbackValid(registeredService, redirectUri)) {
+                throw new IllegalArgumentException("Redirect URI %s is not registered for client %s".formatted(redirectUri, clientId));
+            }
+        }
+
+        val factory = (TransientSessionTicketFactory) configurationContext.getTicketFactory().get(TransientSessionTicket.class);
+        val transientSessionTicket = factory.create(CollectionUtils.wrap(
+            "nonce", UUID.randomUUID().toString(),
+            "credentials", request.getCredentials()
+        ));
+        transientSessionTicket.putProperty("state", transientSessionTicket.getId());
+        transientSessionTicket.putProperty(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_CLIENT_ID, clientId);
+        if (StringUtils.isNotBlank(redirectUri)) {
+            transientSessionTicket.putProperty(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_REDIRECT_URI, redirectUri);
+        }
+        transientSessionTicket.putProperty(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_RESPONSE_MODE,
+            responseMode.getValue());
+        if (origin != null) {
+            transientSessionTicket.putProperty(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_ORIGIN, origin);
+        }
+        if (responseMode.isEncrypted()) {
+            transientSessionTicket.putProperty(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_RESPONSE_ENCRYPTION_KEY,
+                generateResponseEncryptionKey(transientSessionTicket.getId()));
+        }
+        val addedTicket = (TransientSessionTicket) configurationContext.getTicketRegistry().addTicket(transientSessionTicket);
+
+        val parameters = buildAuthorizationRequestParameters(addedTicket);
+        if (responseMode.isDigitalCredentialsApi()) {
+            return ResponseEntity.ok(
+                OidcVerifiableCredentialPresentationResponse
+                    .builder()
+                    .requestId(addedTicket.getId())
+                    .digitalCredentialsRequest(buildDigitalCredentialsRequest(parameters, addedTicket))
+                    .expiresIn(transientSessionTicket.getExpirationPolicy().getTimeToLive())
+                    .build()
+            );
+        }
+        final String requestUri = isRequestObjectSigned()
+            ? configurationContext.getCasProperties().getAuthn().getOidc().getCore().getIssuer()
+              + '/' + OidcConstants.VC_PRESENTATION_REQUEST_URL + '/' + addedTicket.getId()
+            : null;
+        val authorizationRequest = requestUri != null
+            ? buildDeepLink(Map.of(
+                OAuth20Constants.CLIENT_ID, parameters.get(OAuth20Constants.CLIENT_ID),
+                OidcConstants.REQUEST_URI, requestUri))
+            : buildDeepLink(parameters);
+
+        return ResponseEntity.ok(
+            OidcVerifiableCredentialPresentationResponse
+                .builder()
+                .requestId(addedTicket.getId())
+                .requestUri(requestUri)
+                .authorizationRequest(authorizationRequest)
+                .expiresIn(transientSessionTicket.getExpirationPolicy().getTimeToLive())
+                .build()
+        );
+    }
+
+    /**
+     * Response mode for a request: the one the relying party names in the request, or else the configured one. The
+     * configured mode is a floor for encryption: a request may ask for an encrypted response where the deployment does
+     * not require one, but cannot drop encryption where it does, and an unknown mode is refused.
+     *
+     * @param request the presentation request
+     * @return the response mode
+     */
+    protected OidcVerifiableCredentialsPresentationProperties.ResponseModes resolveResponseMode(
+        final OidcVerifiableCredentialPresentationRequest request) {
+        val configured = configurationContext.getCasProperties().getAuthn().getOidc().getVc().getPresentation().getResponseMode();
+        if (StringUtils.isBlank(request.getResponseMode())) {
+            return configured;
+        }
+        val requested = Arrays.stream(OidcVerifiableCredentialsPresentationProperties.ResponseModes.values())
+            .filter(mode -> mode.getValue().equals(request.getResponseMode()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Response mode %s is not supported".formatted(request.getResponseMode())));
+        if (configured.isEncrypted() && !requested.isEncrypted()) {
+            throw new IllegalArgumentException("Response mode %s is not allowed: responses must be encrypted".formatted(requested.getValue()));
+        }
+        return requested;
+    }
+
+    /**
+     * Origin of the relying party page that calls the Digital Credentials API. The wallet binds the presentation to it,
+     * so CAS only accepts an origin the client's registered redirect URIs accept (as {@code origin/}): otherwise a
+     * client could have CAS verify presentations bound to someone else's site. A same-device {@code redirect_uri} has
+     * no meaning here, since the answer returns to the page.
+     *
+     * @param request  the presentation request
+     * @param clientId the authenticated client id
+     * @return the origin, without a trailing slash
+     */
+    protected String verifyOrigin(final OidcVerifiableCredentialPresentationRequest request, final String clientId) {
+        val origin = StringUtils.removeEnd(StringUtils.trimToEmpty(request.getOrigin()), "/");
+        val uri = StringUtils.isBlank(origin) ? null : URI.create(origin);
+        if (uri == null || uri.getScheme() == null || uri.getHost() == null || StringUtils.isNotBlank(uri.getRawPath())
+            || uri.getRawQuery() != null || uri.getRawFragment() != null || uri.getRawUserInfo() != null) {
+            throw new IllegalArgumentException("The Digital Credentials API needs the origin of the relying party page");
+        }
+        if (StringUtils.isNotBlank(request.getRedirectUri())) {
+            throw new IllegalArgumentException("A redirect URI cannot be used with the Digital Credentials API");
+        }
+        val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientId);
+        if (registeredService == null || !OAuth20Utils.checkCallbackValid(registeredService, origin + '/')) {
+            throw new IllegalArgumentException("Origin %s is not registered for client %s".formatted(origin, clientId));
+        }
+        return origin;
+    }
+
+    /**
+     * Request the relying party page passes to {@code navigator.credentials.get()} (OpenID4VP 1.0 Appendix A). An
+     * unsigned request carries the parameters themselves; with an {@code x509} client identifier prefix the request is
+     * signed and carried as {@code request}.
+     *
+     * @param parameters             the authorization request parameters
+     * @param transientSessionTicket the presentation transaction
+     * @return the protocol and data of the Digital Credentials API request
+     * @throws Throwable the throwable
+     */
+    protected Map<String, Object> buildDigitalCredentialsRequest(final Map<String, Object> parameters,
+                                                                 final TransientSessionTicket transientSessionTicket) throws Throwable {
+        return isRequestObjectSigned()
+            ? Map.of("protocol", DIGITAL_CREDENTIALS_PROTOCOL_SIGNED,
+                "data", Map.of("request", signAuthorizationRequest(parameters, transientSessionTicket)))
+            : Map.of("protocol", DIGITAL_CREDENTIALS_PROTOCOL_UNSIGNED, "data", parameters);
+    }
+
+    /**
+     * Ephemeral key the wallet encrypts its response to, generated for one request as HAIP 1.0 requires: a
+     * {@code P-256} key for {@code ECDH-ES}. Its key id is the request id, which the wallet repeats in the JWE
+     * header, so the response endpoint can find the request, and the key, before it can read the response.
+     *
+     * @param requestId the presentation request id
+     * @return the private JWK as JSON
+     * @throws Exception the exception
+     */
+    protected String generateResponseEncryptionKey(final String requestId) throws Exception {
+        val key = EcJwkGenerator.generateJwk(EllipticCurves.P256);
+        key.setKeyId(requestId);
+        key.setUse(Use.ENCRYPTION);
+        key.setAlgorithm(KeyManagementAlgorithmIdentifiers.ECDH_ES);
+        return key.toJson(JsonWebKey.OutputControlLevel.INCLUDE_PRIVATE);
+    }
+
+    protected boolean isRequestObjectSigned() {
+        return configurationContext.getCasProperties().getAuthn().getOidc().getVc()
+            .getPresentation().getClientIdentifierPrefix() != ClientIdentifierPrefixes.REDIRECT_URI;
+    }
+
+    /**
+     * Build the OpenID4VP authorization request parameters for a presentation transaction.
+     * The same parameters are carried by value in the deep link or signed into a request
+     * object, so that both delivery modes describe an identical request. A Digital Credentials API request
+     * (OpenID4VP 1.0 Appendix A) carries no {@code response_uri} or {@code state}, since the answer returns to the
+     * relying party page, and no {@code client_id} unless it is signed, in which case it lists {@code expected_origins}.
+     *
+     * @param transientSessionTicket the presentation transaction
+     * @return the authorization request parameters
+     * @throws Exception the exception
+     */
+    protected Map<String, Object> buildAuthorizationRequestParameters(final TransientSessionTicket transientSessionTicket) throws Exception {
+        val casProperties = configurationContext.getCasProperties();
+        val responseEncryptionKey = transientSessionTicket.getPropertyAsString(
+            OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_RESPONSE_ENCRYPTION_KEY);
+        final OidcVerifiableCredentialPresentationClientMetadata.OidcVerifiableCredentialPresentationClientMetadataBuilder<?, ?> clientMetadataBuilder =
+            OidcVerifiableCredentialPresentationClientMetadata.builder()
+                .clientName("Apereo CAS")
+                .vpFormatsSupported(Map.of(
+                    OidcVerifiableCredentialConfigurationProperties.CredentialConfigurationFormats.DC_SD_JWT.getValue(),
+                    OidcVerifiableCredentialPresentationClientMetadata.VpFormat.builder()
+                        .sdJwtAlgValues(resolveCredentialSigningAlgorithms())
+                        .kbJwtAlgValues(OidcVerifiableCredentialPresentationResponseEndpointController.KEY_BINDING_ALGORITHMS_SUPPORTED)
+                        .build()
+                ));
+        if (StringUtils.isNotBlank(responseEncryptionKey)) {
+            val publicKey = PublicJsonWebKey.Factory.newPublicJwk(responseEncryptionKey)
+                .toParams(JsonWebKey.OutputControlLevel.PUBLIC_ONLY);
+            clientMetadataBuilder
+                .jwks(Map.of(JsonWebKeySet.JWK_SET_MEMBER_NAME, List.of(publicKey)))
+                .encryptedResponseEncValuesSupported(
+                    OidcVerifiableCredentialPresentationResponseEndpointController.RESPONSE_ENCRYPTION_ALGORITHMS_SUPPORTED);
+        }
+        val clientMetadata = clientMetadataBuilder.build();
+
+        val credentials = (List<OidcVerifiableCredentialPresentationRequest.CredentialRequest>)
+            Objects.requireNonNull(transientSessionTicket.getProperty("credentials", List.class));
+        val dcqlCredentials = credentials
+            .stream()
+            .map(OidcVerifiableCredentialPresentationRequestEndpointController::toCredentialQuery)
+            .toList();
+
+        val parameters = new LinkedHashMap<String, Object>();
+        final String responseMode = Objects.requireNonNullElseGet(
+            transientSessionTicket.getPropertyAsString(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_RESPONSE_MODE),
+            () -> StringUtils.isNotBlank(responseEncryptionKey)
+                ? OidcVerifiableCredentialsPresentationProperties.ResponseModes.DIRECT_POST_JWT.getValue()
+                : OidcVerifiableCredentialsPresentationProperties.ResponseModes.DIRECT_POST.getValue());
+        val origin = transientSessionTicket.getPropertyAsString(OidcVerifiableCredentialPresentationResponseEndpointController.PROPERTY_ORIGIN);
+        if (origin == null || isRequestObjectSigned()) {
+            parameters.put(OAuth20Constants.CLIENT_ID, resolveClientIdentifier(configurationContext));
+        }
+        parameters.put(OAuth20Constants.RESPONSE_TYPE, "vp_token");
+        parameters.put(OAuth20Constants.RESPONSE_MODE, responseMode);
+        if (origin == null) {
+            parameters.put("response_uri", resolveResponseUri(casProperties));
+        } else if (isRequestObjectSigned()) {
+            parameters.put("expected_origins", List.of(origin));
+        }
+        parameters.put(OAuth20Constants.NONCE, Objects.requireNonNull(transientSessionTicket.getPropertyAsString("nonce")));
+        if (origin == null) {
+            parameters.put(OAuth20Constants.STATE, Objects.requireNonNull(transientSessionTicket.getPropertyAsString("state")));
+        }
+        parameters.put("dcql_query", MAPPER.convertValue(Map.of("credentials", dcqlCredentials), Map.class));
+        parameters.put("client_metadata", MAPPER.convertValue(clientMetadata, Map.class));
+        return parameters;
+    }
+
+    /**
+     * Credential signing algorithms the verifier accepts, advertised as {@code sd-jwt_alg_values}: those of the
+     * {@code dc+sd-jwt} credential configurations, since a presented credential is checked against the
+     * configuration its {@code vct} names.
+     *
+     * @return the credential signing algorithms
+     */
+    protected List<String> resolveCredentialSigningAlgorithms() {
+        return configurationContext.getCasProperties().getAuthn().getOidc().getVc().getIssuer().getCredentialConfigurations()
+            .values()
+            .stream()
+            .filter(configuration -> configuration.getFormat()
+                == OidcVerifiableCredentialConfigurationProperties.CredentialConfigurationFormats.DC_SD_JWT)
+            .flatMap(configuration -> configuration.getCredentialSigningAlgValuesSupported().stream())
+            .distinct()
+            .toList();
+    }
+
+    /**
+     * DCQL credential query for one requested credential. DCQL has no per-claim {@code required} flag: when some
+     * claims are optional, every claim gets an {@code id} and {@code claim_sets} lists the acceptable combinations
+     * in order of preference, all claims first and then the required ones alone. When none is required, each claim
+     * on its own is an option after the full set. Without optional claims the query lists the claims only, which
+     * requests all of them.
+     *
+     * @param credential the requested credential
+     * @return the credential query
+     */
+    protected static OidcVerifiableCredentialDCQL toCredentialQuery(
+        final OidcVerifiableCredentialPresentationRequest.CredentialRequest credential) {
+        final List<OidcVerifiableCredentialPresentationRequest.ClaimRequest> claims =
+            credential.getClaims() == null ? List.of() : credential.getClaims();
+        val optionalClaims = claims.stream().anyMatch(claim -> !claim.isRequired());
+        val claimQueries = IntStream.range(0, claims.size())
+            .<OidcVerifiableCredentialDCQL.DCQLCredentialClaimRequest>mapToObj(index -> OidcVerifiableCredentialDCQL.DCQLCredentialClaimRequest.builder()
+                .id(optionalClaims ? CLAIM_ID_PREFIX + index : null)
+                .path(claims.get(index).getPath())
+                .build())
+            .toList();
+        val claimSets = new ArrayList<List<String>>();
+        if (optionalClaims) {
+            val allClaims = IntStream.range(0, claims.size()).mapToObj(index -> CLAIM_ID_PREFIX + index).toList();
+            val requiredClaims = IntStream.range(0, claims.size())
+                .filter(index -> claims.get(index).isRequired())
+                .mapToObj(index -> CLAIM_ID_PREFIX + index)
+                .toList();
+            claimSets.add(allClaims);
+            if (requiredClaims.isEmpty()) {
+                allClaims.forEach(claimId -> claimSets.add(List.of(claimId)));
+            } else {
+                claimSets.add(requiredClaims);
+            }
+        }
+        return OidcVerifiableCredentialDCQL
+            .builder()
+            .id(credential.getId())
+            .format(credential.getFormat())
+            .meta(OidcVerifiableCredentialDCQL.Meta.builder()
+                .vctValues(credential.getVctValues())
+                .build())
+            .claims(claimQueries)
+            .claimSets(claimSets)
+            .build();
+    }
+
+    /**
+     * The client that authenticated to call this endpoint.
+     *
+     * @param httpRequest  the http request
+     * @param httpResponse the http response
+     * @return the client id
+     */
+    protected String resolveAuthenticatedClientId(final HttpServletRequest httpRequest, final HttpServletResponse httpResponse) {
+        return resolveAuthenticatedClientId(configurationContext, httpRequest, httpResponse);
+    }
+
+    /**
+     * The client that authenticated to call a relying party endpoint of the verifier.
+     *
+     * @param configurationContext the configuration context
+     * @param httpRequest          the http request
+     * @param httpResponse         the http response
+     * @return the client id
+     */
+    public static String resolveAuthenticatedClientId(final OidcConfigurationContext configurationContext,
+                                                      final HttpServletRequest httpRequest, final HttpServletResponse httpResponse) {
+        val profile = OAuth20Utils.getAuthenticatedUserProfile(new JEEContext(httpRequest, httpResponse),
+            configurationContext.getSessionStore());
+        val clientId = profile.getAttribute(OAuth20Constants.CLIENT_ID);
+        return clientId != null ? clientId.toString() : profile.getId();
+    }
+
+    /**
+     * Sign the authorization request into a request object.
+     * The {@code typ} header and the audience are what let a wallet accept the object at all.
+     *
+     * @param parameters             the authorization request parameters
+     * @param transientSessionTicket the presentation transaction
+     * @return the compact serialization of the request object
+     * @throws Throwable the throwable
+     */
+    protected String signAuthorizationRequest(final Map<String, Object> parameters,
+                                              final TransientSessionTicket transientSessionTicket) throws Throwable {
+        val signingKey = configurationContext.getIdTokenSigningAndEncryptionService()
+            .getJsonWebKeySigningKey(Optional.empty());
+        Objects.requireNonNull(signingKey, "CAS has no OpenID Connect signing key to sign the request object");
+        Objects.requireNonNull(signingKey.getPrivateKey(), "The OpenID Connect signing key has no private key");
+
+        val clientId = parameters.get(OAuth20Constants.CLIENT_ID).toString();
+        val certificateChain = verifyCertificateChain(signingKey, clientId);
+
+        val claims = new JwtClaims();
+        parameters.forEach(claims::setClaim);
+        claims.setIssuer(clientId);
+        claims.setAudience(STATIC_DISCOVERY_AUDIENCE);
+        val issuedAt = NumericDate.now();
+        claims.setIssuedAt(issuedAt);
+        claims.setExpirationTime(NumericDate.fromSeconds(
+            issuedAt.getValue() + transientSessionTicket.getExpirationPolicy().getTimeToLive()));
+
+        val jws = new JsonWebSignature();
+        jws.setPayload(claims.toJson());
+        jws.setKey(signingKey.getPrivateKey());
+        FunctionUtils.doIfNotNull(signingKey.getKeyId(), jws::setKeyIdHeaderValue);
+        jws.setAlgorithmHeaderValue(signingKey instanceof EllipticCurveJsonWebKey
+            ? AlgorithmIdentifiers.ECDSA_USING_P256_CURVE_AND_SHA256
+            : AlgorithmIdentifiers.RSA_USING_SHA256);
+        jws.setHeader("typ", REQUEST_OBJECT_JWT_TYPE);
+        jws.setCertificateChainHeaderValue(certificateChain.toArray(X509Certificate[]::new));
+        return jws.getCompactSerialization();
+    }
+
+    /**
+     * Certificate chain sent in the request object's {@code x5c}. A wallet authenticates an {@code x509_san_dns}
+     * verifier by matching the client identifier against a DNS subject alternative name in the leaf certificate, and an
+     * {@code x509_hash} verifier by matching it against the hash of the leaf certificate, which the client identifier
+     * was computed from. A name that does not match produces a configuration error rather than a request object every
+     * wallet silently rejects. The chain is returned without its trust anchor, which HAIP 1.0 (section 5) forbids in the
+     * request's {@code x5c}. A self-signed leaf is accepted with a warning: HAIP forbids it, but wallets outside HAIP may
+     * accept it.
+     *
+     * @param signingKey the signing key
+     * @param clientId   the client identifier, with its prefix
+     * @return the certificate chain
+     * @throws Exception the exception
+     */
+    protected List<X509Certificate> verifyCertificateChain(final PublicJsonWebKey signingKey,
+                                                           final String clientId) throws Exception {
+        val certificateChain = resolveCertificateChain(signingKey);
+        if (clientId.startsWith(ClientIdentifierPrefixes.X509_SAN_DNS.getValue() + ':')) {
+            val dnsName = StringUtils.substringAfter(clientId, ":");
+            val subjectAlternativeNames = certificateChain.getFirst().getSubjectAlternativeNames();
+            val matched = subjectAlternativeNames != null && subjectAlternativeNames
+                .stream()
+                .filter(name -> name.size() == 2 && Integer.valueOf(SUBJECT_ALTERNATIVE_NAME_DNS).equals(name.getFirst()))
+                .anyMatch(name -> dnsName.equalsIgnoreCase(Objects.toString(name.getLast(), null)));
+            if (!matched) {
+                throw new IllegalStateException(("The leaf certificate of the OpenID Connect signing key has no "
+                    + "dNSName subject alternative name matching [%s]").formatted(dnsName));
+            }
+        }
+        if (CertUtils.isSelfIssued(certificateChain.getFirst())) {
+            LOGGER.warn("The request object signing certificate [{}] is self-signed. HAIP 1.0 requires it to be issued by "
+                + "a trust anchor, and wallets that follow HAIP may refuse the request.",
+                certificateChain.getFirst().getSubjectX500Principal().getName());
+        }
+        return CertUtils.withoutTrustAnchor(certificateChain);
+    }
+
+    /**
+     * Build the wallet deep link. Values are encoded directly rather than through a URI
+     * template, so that the braces in the JSON-valued parameters survive as data.
+     *
+     * @param parameters the query parameters
+     * @return the deep link
+     */
+    protected static String buildDeepLink(final Map<String, Object> parameters) {
+        val query = parameters
+            .entrySet()
+            .stream()
+            .map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8)
+                + '=' + URLEncoder.encode(toParameterValue(entry.getValue()), StandardCharsets.UTF_8))
+            .collect(Collectors.joining("&"));
+        return "openid4vp://authorize?" + query;
+    }
+
+    private static String toParameterValue(final @Nullable Object value) {
+        return value instanceof final String text ? text : MAPPER.writeValueAsString(value);
+    }
+
+    /**
+     * Handle errors.
+     *
+     * @param ex the ex
+     * @return the response entity
+     */
+    @ExceptionHandler(Exception.class)
+    @SuppressWarnings("UnusedMethod")
+    private static ResponseEntity<String> handleErrors(final Exception ex) {
+        LoggingUtils.error(LOGGER, ex);
+        return ResponseEntity.badRequest().contentType(MediaType.TEXT_PLAIN).body(ex.getMessage());
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    public static class OidcVerifiableCredentialPresentationRequest implements Serializable {
+        @Serial
+        private static final long serialVersionUID = -2051574044900203583L;
+
+        /**
+         * Credentials requested from the wallet.
+         */
+        @NotEmpty
+        @Valid
+        @JsonProperty("credentials")
+        private List<CredentialRequest> credentials;
+
+        /**
+         * Relying party page the wallet returns the user agent to on the same device, carrying the response code
+         * needed to collect the outcome. It must be registered for the client creating the request.
+         */
+        @JsonProperty("redirect_uri")
+        private String redirectUri;
+
+        /**
+         * Response mode the wallet must use, {@code direct_post} or {@code direct_post.jwt}; the configured one when
+         * absent. A request may ask for encryption but cannot drop it when the deployment requires it.
+         */
+        @JsonProperty("response_mode")
+        private String responseMode;
+
+        /**
+         * Origin of the relying party page that calls the Digital Credentials API, required for {@code dc_api} and
+         * {@code dc_api.jwt}. The client's registered redirect URIs must accept it.
+         */
+        @JsonProperty("origin")
+        private String origin;
+
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        public static class CredentialRequest implements Serializable {
+            @Serial
+            private static final long serialVersionUID = -4311488519787067866L;
+
+            /**
+             * Logical identifier for this request.
+             */
+            @NotBlank
+            private String id;
+
+            /**
+             * Credential format, e.g. dc+sd-jwt, jwt_vc_json-ld.
+             */
+            @NotBlank
+            private String format;
+
+            /**
+             * Acceptable credential types (VCTs) for dc+sd-jwt.
+             */
+            @JsonProperty("vct_values")
+            private List<String> vctValues;
+
+            /**
+             * Requested claims.
+             */
+            private List<ClaimRequest> claims;
+        }
+
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        public static class ClaimRequest implements Serializable {
+            @Serial
+            private static final long serialVersionUID = 1203934733451522730L;
+
+            /**
+             * Claim path, e.g. ["given_name"] or ["address","street"].
+             */
+            @NotEmpty
+            private List<String> path;
+
+            /**
+             * Whether disclosure of this claim is required.
+             */
+            private boolean required = true;
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
+    public static class OidcVerifiableCredentialPresentationResponse implements Serializable {
+        @Serial
+        private static final long serialVersionUID = -2135647280123456789L;
+
+        /**
+         * Unique request identifier.
+         */
+        @JsonProperty("request_id")
+        private String requestId;
+
+        /**
+         * URI where the wallet can fetch the complete authorization request.
+         */
+        @JsonProperty("request_uri")
+        private String requestUri;
+
+        /**
+         * Deep link suitable for QR codes or mobile wallets.
+         */
+        @JsonProperty("authorization_request")
+        private String authorizationRequest;
+
+        /**
+         * Request to pass to {@code navigator.credentials.get()} as a digital credential request, with its
+         * {@code protocol} and {@code data}, for the Digital Credentials API response modes.
+         */
+        @JsonProperty("digital_credentials_request")
+        private Map<String, Object> digitalCredentialsRequest;
+
+        /**
+         * Lifetime of the request in seconds.
+         */
+        @JsonProperty("expires_in")
+        private long expiresIn;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
+    public static class OidcVerifiableCredentialPresentationClientMetadata implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 514084664620629089L;
+
+        /**
+         * Supported VP formats.
+         */
+        @JsonProperty("vp_formats_supported")
+        @Builder.Default
+        private Map<String, VpFormat> vpFormatsSupported = new LinkedHashMap<>();
+
+        /**
+         * Human-readable verifier information.
+         */
+        @JsonProperty("client_name")
+        private String clientName;
+
+        @JsonProperty("logo_uri")
+        private URI logoUri;
+
+        @JsonProperty("policy_uri")
+        private URI policyUri;
+
+        @JsonProperty("tos_uri")
+        private URI termsOfServiceUri;
+
+        /**
+         * Public keys the wallet may encrypt its response to.
+         */
+        @JsonProperty("jwks")
+        private Map<String, Object> jwks;
+
+        /**
+         * Content encryption algorithms the verifier accepts for an encrypted response.
+         */
+        @JsonProperty("encrypted_response_enc_values_supported")
+        private List<String> encryptedResponseEncValuesSupported;
+
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        @SuperBuilder
+        @Jacksonized
+        public static class VpFormat implements Serializable {
+            @Serial
+            private static final long serialVersionUID = 1459533499391098688L;
+
+            /**
+             * JWT algorithms supported for JWT-based credentials.
+             */
+            @JsonProperty("alg_values")
+            private List<String> algValues;
+
+            /**
+             * Supported issuer SD-JWT algorithms.
+             */
+            @JsonProperty("sd-jwt_alg_values")
+            private List<String> sdJwtAlgValues;
+
+            /**
+             * Supported Key Binding JWT algorithms.
+             */
+            @JsonProperty("kb-jwt_alg_values")
+            private List<String> kbJwtAlgValues;
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @SuperBuilder
+    @Jacksonized
+    public static class OidcVerifiableCredentialDCQL implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 4548552217887285520L;
+        /**
+         * Logical identifier for this request.
+         */
+        @NotBlank
+        private String id;
+
+        /**
+         * Credential format, e.g. dc+sd-jwt, jwt_vc_json-ld.
+         */
+        @NotBlank
+        private String format;
+
+        private Meta meta;
+
+        /**
+         * Acceptable combinations of claim ids, in order of preference.
+         */
+        @JsonProperty("claim_sets")
+        private List<List<String>> claimSets;
+
+        /**
+         * Requested claims.
+         */
+        private List<DCQLCredentialClaimRequest> claims;
+
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        @SuperBuilder
+        @Jacksonized
+        public static class Meta implements Serializable {
+            @Serial
+            private static final long serialVersionUID = 3646996453536891101L;
+            /**
+             * Acceptable credential types (VCTs) for dc+sd-jwt.
+             */
+            @JsonProperty("vct_values")
+            private List<String> vctValues;
+        }
+
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        @SuperBuilder
+        @Jacksonized
+        public static class DCQLCredentialClaimRequest implements Serializable {
+            @Serial
+            private static final long serialVersionUID = 1103934733451522730L;
+
+            /**
+             * Claim id, referenced from {@code claim_sets}.
+             */
+            private String id;
+
+            /**
+             * Claim path, e.g. ["given_name"] or ["address","street"].
+             */
+            @NotEmpty
+            private List<String> path;
+        }
+    }
+}

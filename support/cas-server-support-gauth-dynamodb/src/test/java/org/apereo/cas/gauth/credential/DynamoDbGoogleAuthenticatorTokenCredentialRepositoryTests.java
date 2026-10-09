@@ -4,10 +4,12 @@ import module java.base;
 import org.apereo.cas.config.CasGoogleAuthenticatorDynamoDbAutoConfiguration;
 import org.apereo.cas.otp.repository.credentials.OneTimeTokenCredentialRepository;
 import org.apereo.cas.test.CasTestExtension;
+import org.apereo.cas.util.RandomUtils;
 import org.apereo.cas.util.junit.EnabledIfListeningOnPort;
 import lombok.Getter;
-import org.junit.jupiter.api.BeforeEach;
+import lombok.val;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -16,6 +18,7 @@ import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 import software.amazon.awssdk.core.SdkSystemSetting;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * This is {@link DynamoDbGoogleAuthenticatorTokenCredentialRepositoryTests}.
@@ -31,7 +34,9 @@ import software.amazon.awssdk.core.SdkSystemSetting;
         "cas.authn.mfa.gauth.dynamo-db.endpoint=http://localhost:8000",
         "cas.authn.mfa.gauth.dynamo-db.drop-tables-on-startup=true",
         "cas.authn.mfa.gauth.dynamo-db.local-instance=true",
-        "cas.authn.mfa.gauth.dynamo-db.region=us-east-1"
+        "cas.authn.mfa.gauth.dynamo-db.region=us-east-1",
+        "cas.authn.mfa.gauth.dynamo-db.table-name=CredentialRepositoryTests",
+        "cas.authn.mfa.gauth.dynamo-db.token-table-name=CredentialRepositoryTokenTests"
     })
 @EnableTransactionManagement(proxyTargetClass = false)
 @EnableAspectJAutoProxy(proxyTargetClass = false)
@@ -50,8 +55,55 @@ class DynamoDbGoogleAuthenticatorTokenCredentialRepositoryTests extends BaseOneT
     @Qualifier(BaseGoogleAuthenticatorTokenCredentialRepository.BEAN_NAME)
     private OneTimeTokenCredentialRepository registry;
 
-    @BeforeEach
-    void cleanUp() {
-        registry.deleteAll();
+    @Autowired
+    @Qualifier("googleAuthenticatorTokenCredentialRepositoryFacilitator")
+    private DynamoDbGoogleAuthenticatorTokenCredentialRepositoryFacilitator facilitator;
+
+    @Test
+    void verifyScratchCodesAndTenantRoundTrip() {
+        val username = UUID.randomUUID().toString();
+        val wideCode = new BigInteger("123456789012345678901234567890123456789012345678901234567890");
+        val account = registry.create(username);
+        account.setScratchCodes(new ArrayList<>(List.of(wideCode)));
+        val id = registry.save(account).getId();
+        assertEquals(List.of(wideCode), registry.get(username, id).getScratchCodes());
+
+        val withoutCodes = registry.get(username, id);
+        withoutCodes.setScratchCodes(new ArrayList<>());
+        registry.update(withoutCodes);
+        assertTrue(registry.get(username, id).getScratchCodes().isEmpty());
+
+        val tenantAccount = registry.create(UUID.randomUUID().toString());
+        tenantAccount.assignIdIfNecessary();
+        tenantAccount.setTenant("shire");
+        facilitator.store(tenantAccount);
+        assertEquals("shire", facilitator.find(tenantAccount.getId()).getTenant());
+    }
+
+    @Test
+    void verifyDeletesLeaveOtherAccounts() {
+        val removedUser = "a" + UUID.randomUUID();
+        val keptUser = "z" + UUID.randomUUID();
+        val baseId = RandomUtils.nextLong(1, Long.MAX_VALUE / 2);
+        saveAccount(removedUser, baseId);
+        saveAccount(keptUser, baseId + 1);
+        saveAccount(keptUser, baseId + 2);
+
+        registry.delete(baseId);
+        assertNull(registry.get(baseId));
+        assertEquals(2, registry.count(keptUser));
+
+        saveAccount(removedUser, baseId + 3);
+        registry.delete(removedUser);
+        assertEquals(0, registry.count(removedUser));
+        assertEquals(2, registry.count(keptUser));
+        assertNotNull(registry.get(keptUser, baseId + 1));
+        assertNotNull(registry.get(keptUser, baseId + 2));
+    }
+
+    private void saveAccount(final String username, final long id) {
+        val account = registry.create(username);
+        account.setId(id);
+        registry.save(account);
     }
 }

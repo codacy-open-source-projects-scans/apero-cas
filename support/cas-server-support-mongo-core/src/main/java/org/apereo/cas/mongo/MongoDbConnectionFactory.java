@@ -11,6 +11,7 @@ import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCredential;
 import com.mongodb.ReadConcern;
 import com.mongodb.ReadConcernLevel;
+import com.mongodb.ReadPreference;
 import com.mongodb.ServerAddress;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
@@ -53,6 +54,14 @@ import org.springframework.util.ClassUtils;
  */
 @Slf4j
 public class MongoDbConnectionFactory {
+    /**
+     * Replacement used for dots found in map keys when documents are written.
+     * MongoDB reserves the dot as a path separator, so {@link MappingMongoConverter}
+     * escapes it on write. Any query that addresses a map field by path must apply
+     * the same replacement, or it will address a nested document that does not exist.
+     */
+    public static final String MAP_KEY_DOT_REPLACEMENT = "_#_";
+
     private static final Set<String> MONGO_INDEX_KEYS = Set.of("v", "key", "name", "ns");
 
     private static final int DEFAULT_PORT = 27017;
@@ -98,6 +107,8 @@ public class MongoDbConnectionFactory {
         mongoConverters.add(new BaseConverters.BsonTimestampToDateConverter());
         mongoConverters.add(new BaseConverters.ZonedDateTimeToStringConverter());
         mongoConverters.add(new BaseConverters.StringToZonedDateTimeConverter());
+        mongoConverters.add(new BaseConverters.BigIntegerToStringConverter());
+        mongoConverters.add(new BaseConverters.StringToBigIntegerConverter());
         mongoConverters.addAll(Jsr310Converters.getConvertersToRegister());
 
         this.customConversions = new MongoCustomConversions(mongoConverters);
@@ -188,6 +199,7 @@ public class MongoDbConnectionFactory {
         return MongoCredential.createCredential(mongo.getUserId(), dbName, mongo.getPassword().toCharArray());
     }
 
+
     /**
      * Build mongo db client.
      *
@@ -219,7 +231,12 @@ public class MongoDbConnectionFactory {
                 val addr = new ServerAddress(mongo.getHost(), port);
                 servers.add(addr);
             }
-            settingsBuilder.applyToClusterSettings(builder -> builder.hosts(servers));
+            settingsBuilder.applyToClusterSettings(builder -> {
+                builder.hosts(servers);
+                if (StringUtils.isNotBlank(mongo.getReplicaSet())) {
+                    builder.requiredReplicaSetName(mongo.getReplicaSet());
+                }
+            });
             val credential = buildMongoCredential(mongo);
             settingsBuilder
                 .credential(credential)
@@ -228,6 +245,7 @@ public class MongoDbConnectionFactory {
                     CodecRegistries.fromProviders(new BaseConverters.ZonedDateTimeCodecProvider()),
                     MongoClientSettings.getDefaultCodecRegistry()))
                 .readConcern(new ReadConcern(ReadConcernLevel.valueOf(mongo.getReadConcern())))
+                .readPreference(ReadPreference.valueOf(mongo.getReadPreference()))
                 .applyToConnectionPoolSettings(builder -> {
                     val poolConfig = mongo.getPool();
                     val pool = ConnectionPoolSettings.builder()
@@ -303,7 +321,7 @@ public class MongoDbConnectionFactory {
         val dbRefResolver = new DefaultDbRefResolver(mongoDbFactory);
         val converter = new MappingMongoConverter(dbRefResolver, mongoMappingContext());
         converter.setCustomConversions(customConversions);
-        converter.setMapKeyDotReplacement("_#_");
+        converter.setMapKeyDotReplacement(MAP_KEY_DOT_REPLACEMENT);
         converter.afterPropertiesSet();
         return converter;
     }

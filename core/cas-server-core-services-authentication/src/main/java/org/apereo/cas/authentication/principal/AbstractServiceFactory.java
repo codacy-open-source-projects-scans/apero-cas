@@ -2,12 +2,14 @@ package org.apereo.cas.authentication.principal;
 
 import module java.base;
 import org.apereo.cas.CasProtocolConstants;
+import org.apereo.cas.CentralAuthenticationService;
 import org.apereo.cas.multitenancy.TenantDefinition;
 import org.apereo.cas.multitenancy.TenantExtractor;
 import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.http.HttpRequestUtils;
 import org.apereo.cas.web.UrlValidator;
+import org.apereo.cas.web.flow.CasWebflowConstants;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -15,6 +17,7 @@ import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.text.StringEscapeUtils;
 import org.apache.hc.core5.net.URIBuilder;
@@ -41,7 +44,8 @@ public abstract class AbstractServiceFactory<T extends Service> implements Servi
         CasProtocolConstants.PARAMETER_SERVICE,
         CasProtocolConstants.PARAMETER_TARGET_SERVICE,
         CasProtocolConstants.PARAMETER_TICKET,
-        CasProtocolConstants.PARAMETER_FORMAT);
+        CasProtocolConstants.PARAMETER_FORMAT,
+        CasWebflowConstants.PARAMETER_FLOW_EXECUTION_KEY);
 
     private final TenantExtractor tenantExtractor;
     private final UrlValidator urlValidator;
@@ -81,6 +85,10 @@ public abstract class AbstractServiceFactory<T extends Service> implements Servi
         return null;
     }
 
+    protected static boolean isInternalAttributeName(final String name) {
+        return Strings.CI.startsWith(name, CentralAuthenticationService.NAMESPACE);
+    }
+    
     protected Map<String, List> extractQueryParameters(@Nullable final Service service) {
         val attributes = new LinkedHashMap<String, List>();
         if (service instanceof final WebApplicationService webApplicationService) {
@@ -88,10 +96,13 @@ public abstract class AbstractServiceFactory<T extends Service> implements Servi
             try {
                 if (urlValidator.isValid(originalUrl)) {
                     val queryParams = FunctionUtils.doUnchecked(() -> new URIBuilder(originalUrl).getQueryParams());
-                    queryParams.forEach(pair -> {
-                        val values = CollectionUtils.wrapArrayList(StringEscapeUtils.escapeHtml4(pair.getValue()));
-                        attributes.put(pair.getName(), values);
-                    });
+                    queryParams
+                        .stream()
+                        .filter(pair -> !isInternalAttributeName(pair.getName()))
+                        .forEach(pair -> {
+                            val values = CollectionUtils.wrapArrayList(StringEscapeUtils.escapeHtml4(pair.getValue()));
+                            attributes.put(pair.getName(), values);
+                        });
                 }
             } catch (final Exception e) {
                 LOGGER.error("Unable to extract query parameters from [{}]: [{}]", originalUrl, e.getMessage());
@@ -105,13 +116,14 @@ public abstract class AbstractServiceFactory<T extends Service> implements Servi
             .entrySet()
             .stream()
             .filter(entry -> !IGNORED_ATTRIBUTES_PARAMS.contains(entry.getKey()))
+            .filter(entry -> !isInternalAttributeName(entry.getKey()))
             .map(entry -> Pair.of(entry.getKey(), CollectionUtils.toCollection(entry.getValue(), ArrayList.class)))
             .collect(Collectors.toMap(Pair::getKey, Pair::getValue));
         attributes.putAll(extractQueryParameters(service));
-        
+
         val fullUrl = HttpRequestUtils.getFullRequestUrl(request);
         collectHttpRequestProperty("fullRequestUrl", fullUrl, attributes);
-        
+
         val collectAttributes = Objects.requireNonNullElse((Boolean) request.getAttribute(COLLECT_SERVICE_ATTRIBUTES), Boolean.TRUE);
         if (collectAttributes) {
             FunctionUtils.doIfNotBlank(request.getPathInfo(), value -> collectHttpRequestProperty("pathInfo", value, attributes));

@@ -28,6 +28,20 @@ public interface OAuth20AccessToken extends OAuth20Token, ServiceAwareTicket {
     void setIdToken(String idToken);
 
     /**
+     * Sets credential configuration ids.
+     *
+     * @param credentialConfigurationIds the credential configuration ids
+     */
+    void setCredentialConfigurationIds(List<String> credentialConfigurationIds);
+
+    /**
+     * Gets credential configuration ids.
+     *
+     * @return the credential configuration ids
+     */
+    List<String> getCredentialConfigurationIds();
+
+    /**
      * Gets ID token.
      *
      * @return the ID token
@@ -47,4 +61,27 @@ public interface OAuth20AccessToken extends OAuth20Token, ServiceAwareTicket {
      * @return access token expiration in seconds
      */
     long getExpiresIn();
+
+    /**
+     * Gets authorization details.
+     *
+     * @return the authorization details
+     */
+    List<? extends Serializable> getAuthorizationDetails();
+
+    /**
+     * Sets authorization details.
+     *
+     * @param authorizationDetails the authorization details
+     */
+    void setAuthorizationDetails(List<? extends Serializable> authorizationDetails);
+
+    /**
+     * Has authorization details.
+     *
+     * @return true/false
+     */
+    default boolean hasAuthorizationDetails() {
+        return getAuthorizationDetails() != null && !getAuthorizationDetails().isEmpty();
+    }
 }

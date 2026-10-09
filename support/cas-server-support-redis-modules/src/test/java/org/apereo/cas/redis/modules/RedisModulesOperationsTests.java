@@ -53,8 +53,7 @@ class RedisModulesOperationsTests {
             val result = command.ftCreate(indexName,
                 List.of(TextFieldArgs.builder().name("name").build(), NumericFieldArgs.builder().name("id").build()));
             assertEquals("OK", result);
-            val info = command.ftInfo(indexName);
-            assertNotNull(info);
+            assertTrue(command.ftList().contains(indexName));
         }
 
         @Test

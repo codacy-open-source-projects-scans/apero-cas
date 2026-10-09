@@ -36,19 +36,19 @@ class OAuth20AuthorizationCodeResponseTypeAuthorizationRequestValidatorTests ext
 
     @Test
     void verifyUnsignedRequestParameter() throws Throwable {
-        addRegisteredService(Set.of(), "client", UUID.randomUUID().toString(), "https://.+");
+        val clientId = UUID.randomUUID().toString();
+        addRegisteredService(Set.of(), clientId, UUID.randomUUID().toString(), "https://.+");
         val validator = getValidator(servicesManager);
 
         val request = new MockHttpServletRequest();
         val response = new MockHttpServletResponse();
         val context = new JEEContext(request, response);
 
-        val authnRequest = "eyJhbGciOiJub25lIn0.eyJzY29wZSI6Im9wZW5pZCIsInJlc3Bvbn"
-                           + "NlX3R5cGUiOiJjb2RlIiwicmVkaXJlY3RfdXJpIjoiaHR0"
-                           + "cHM6XC9cL3N0YWdpbmcuY2VydGlmaWNhdGlvbi5vcGVua"
-                           + "WQubmV0XC90ZXN0XC9hXC9DQVNcL2Nhb"
-                           + "GxiYWNrIiwic3RhdGUiOiJ2SU4xYjBZNENrIiwibm9uY2UiOiI"
-                           + "xTjltcVBPOWZ0IiwiY2xpZW50X2lkIjoiY2xpZW50In0.";
+        val claims = """
+            {"scope":"openid","response_type":"code","redirect_uri":"https://staging.certification.openid.net/test/a/CAS/callback",\
+            "state":"vIN1b0Y4Ck","nonce":"1N9mqPO9ft","client_id":"%s"}""".formatted(clientId);
+        val authnRequest = "eyJhbGciOiJub25lIn0."
+            + Base64.getUrlEncoder().withoutPadding().encodeToString(claims.getBytes(StandardCharsets.UTF_8)) + '.';
 
         request.setParameter(OAuth20Constants.REQUEST, authnRequest);
         assertTrue(validator.supports(context));
@@ -71,24 +71,52 @@ class OAuth20AuthorizationCodeResponseTypeAuthorizationRequestValidatorTests ext
         request.removeAttribute(OAuth20Constants.ERROR);
         request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.AUTHORIZATION_CODE.getType());
         assertFalse(validator.supports(context));
+        assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).isPresent());
+        assertEquals("Missing required parameter: [" + OAuth20Constants.CLIENT_ID + ']',
+                     context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).get());
+
+        request.removeAttribute(OAuth20Constants.ERROR);
+        request.setParameter(OAuth20Constants.CLIENT_ID, "invalid-client-id");
+        assertFalse(validator.supports(context));
+        assertEquals(OAuth20Constants.INVALID_REQUEST, context.getRequestAttribute(OAuth20Constants.ERROR).get().toString());
+        assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).isPresent());
+        assertEquals("Service [invalid-client-id] is not found or is not authorized for access",
+                     context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).get());
 
         request.removeAttribute(OAuth20Constants.ERROR);
         request.setParameter(OAuth20Constants.CLIENT_ID, service.getClientId());
         assertFalse(validator.supports(context));
         assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR).isPresent());
         assertEquals(OAuth20Constants.INVALID_REQUEST, context.getRequestAttribute(OAuth20Constants.ERROR).get().toString());
+        assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).isPresent());
+        assertEquals("Missing required parameter: [" + OAuth20Constants.REDIRECT_URI + ']',
+                     context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).get());
+
+        request.removeAttribute(OAuth20Constants.ERROR);
+        request.setParameter(OAuth20Constants.REDIRECT_URI, "invalid.uri");
+        assertFalse(validator.supports(context));
+        assertEquals(OAuth20Constants.INVALID_REQUEST, context.getRequestAttribute(OAuth20Constants.ERROR).get().toString());
+        assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).isPresent());
+        assertEquals("Redirect URI [invalid.uri] found in the request is not authorized for this service",
+                     context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).get());
 
         request.removeAttribute(OAuth20Constants.ERROR);
         request.setParameter(OAuth20Constants.REDIRECT_URI, "https://oauth.example.org");
         assertFalse(validator.supports(context));
         assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR).isPresent());
         assertEquals(OAuth20Constants.UNSUPPORTED_RESPONSE_TYPE, context.getRequestAttribute(OAuth20Constants.ERROR).get().toString());
+        assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).isPresent());
+        assertEquals("Missing required parameter: [" + OAuth20Constants.RESPONSE_TYPE + ']',
+                     context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).get());
 
         request.removeAttribute(OAuth20Constants.ERROR);
         request.setParameter(OAuth20Constants.RESPONSE_TYPE, "unknown");
         assertFalse(validator.supports(context));
         assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR).isPresent());
         assertEquals(OAuth20Constants.UNSUPPORTED_RESPONSE_TYPE, context.getRequestAttribute(OAuth20Constants.ERROR).get().toString());
+        assertTrue(context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).isPresent());
+        assertEquals("Unsupported response_type: [unknown]",
+                     context.getRequestAttribute(OAuth20Constants.ERROR_DESCRIPTION).get());
 
         request.removeAttribute(OAuth20Constants.ERROR);
         request.setParameter(OAuth20Constants.RESPONSE_TYPE, OAuth20ResponseTypes.CODE.getType());

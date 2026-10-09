@@ -1,6 +1,7 @@
 package org.apereo.cas.oidc.web.controllers.dynareg;
 
 import module java.base;
+import org.apereo.cas.oidc.OidcConfigurationContext;
 import org.apereo.cas.oidc.OidcConstants;
 import org.apereo.cas.oidc.dynareg.OidcClientRegistrationResponse;
 import org.apereo.cas.oidc.jwks.generator.OidcJsonWebKeystoreGeneratorService;
@@ -10,12 +11,12 @@ import org.apereo.cas.services.RegisteredServiceProperty.RegisteredServiceProper
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
+import org.apereo.cas.support.oauth.services.OAuthRegisteredServiceClientSecret;
 import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.DateTimeUtils;
 import org.apereo.cas.util.ResourceUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.spring.SpringExpressionLanguageValueResolver;
-import org.apereo.cas.web.SimpleUrlValidatorFactoryBean;
 import lombok.experimental.UtilityClass;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
@@ -34,16 +35,28 @@ public class OidcClientRegistrationUtils {
     /**
      * Gets client registration response.
      *
-     * @param registeredService the registered service
-     * @param serverPrefix      the server prefix
+     * @param registeredService    the registered service
+     * @param configurationContext the configuration context
      * @return the client registration response
      */
-    public static OidcClientRegistrationResponse getClientRegistrationResponse(final OidcRegisteredService registeredService,
-                                                                               final String serverPrefix) {
+    public static OidcClientRegistrationResponse getClientRegistrationResponse(
+        final OidcRegisteredService registeredService,
+        final OidcConfigurationContext configurationContext) {
         val clientResponse = new OidcClientRegistrationResponse();
         clientResponse.setApplicationType(registeredService.getApplicationType());
         clientResponse.setClientId(registeredService.getClientId());
-        clientResponse.setClientSecret(registeredService.getClientSecret());
+
+        val decodedSecret = registeredService
+            .getClientSecrets()
+            .stream()
+            .map(secret -> {
+                val decoded = configurationContext.getRegisteredServiceCipherExecutor().decode(secret.getValue());
+                return new OAuthRegisteredServiceClientSecret(Objects.requireNonNull(decoded), secret.getExpiration());
+            })
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("No client secret is defined for service " + registeredService.getName()));
+
+        clientResponse.setClientSecret(decodedSecret.getValue());
         clientResponse.setSubjectType(registeredService.getSubjectType());
         clientResponse.setTokenEndpointAuthMethod(registeredService.getTokenEndpointAuthenticationMethod());
         clientResponse.setClientName(registeredService.getName());
@@ -69,7 +82,7 @@ public class OidcClientRegistrationUtils {
                 .map(type -> type.getType().toLowerCase(Locale.ENGLISH))
                 .collect(Collectors.toList()));
 
-        val validator = new SimpleUrlValidatorFactoryBean(false).getObject();
+        val validator = configurationContext.getUrlValidator();
         val keystore = SpringExpressionLanguageValueResolver.getInstance().resolve(registeredService.getJwks());
         FunctionUtils.doUnchecked(param -> {
             if (Objects.requireNonNull(validator).isValid(keystore)) {
@@ -86,10 +99,14 @@ public class OidcClientRegistrationUtils {
             clientResponse.setPolicyUri(registeredService.getInformationUrl());
             clientResponse.setTermsOfUseUri(registeredService.getPrivacyUrl());
             clientResponse.setRedirectUris(CollectionUtils.wrapList(registeredService.getServiceId()));
+
+            val serverPrefix = configurationContext.getCasProperties().getServer().getPrefix();
             val clientConfigUri = getClientConfigurationUri(registeredService, serverPrefix);
             clientResponse.setRegistrationClientUri(clientConfigUri);
         });
-        clientResponse.setClientSecretExpiresAt(registeredService.getClientSecretExpiration());
+        if (!decodedSecret.isWithoutExpiration()) {
+            clientResponse.setClientSecretExpiresAt(decodedSecret.toEffectiveExpiration().toEpochSecond());
+        }
         val dynamicRegistrationPropName = RegisteredServiceProperty.RegisteredServiceProperties.OIDC_DYNAMIC_CLIENT_REGISTRATION.getPropertyName();
         if (registeredService.getProperties().containsKey(dynamicRegistrationPropName)) {
             val dt = registeredService.getProperties()

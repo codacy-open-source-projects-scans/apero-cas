@@ -38,6 +38,7 @@ import org.apereo.cas.services.ServicesManager;
 import org.apereo.cas.support.oauth.authenticator.Authenticators;
 import org.apereo.cas.support.oauth.validator.authorization.OAuth20AuthorizationRequestValidator;
 import org.apereo.cas.support.oauth.web.OAuth20RequestParameterResolver;
+import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
 import org.apereo.cas.support.oauth.web.response.accesstoken.ext.AccessTokenGrantRequestExtractor;
 import org.apereo.cas.util.RandomUtils;
 import org.apereo.cas.util.spring.RefreshableHandlerInterceptor;
@@ -164,6 +165,8 @@ class OidcEndpointsConfiguration {
             final ObjectProvider<OAuth20RequestParameterResolver> oauthRequestParameterResolver,
             @Qualifier(ServicesManager.BEAN_NAME)
             final ObjectProvider<ServicesManager> servicesManager,
+            @Qualifier(OAuth20ConfigurationContext.BEAN_NAME)
+            final ObjectProvider<OAuth20ConfigurationContext> oauthConfigurationContext,
             final CasConfigurationProperties casProperties) {
 
             return new OidcHandlerInterceptorAdapter(
@@ -176,7 +179,8 @@ class OidcEndpointsConfiguration {
                 servicesManager,
                 oauthDistributedSessionStore,
                 oauthRequestValidators,
-                oauthRequestParameterResolver);
+                oauthRequestParameterResolver,
+                oauthConfigurationContext);
         }
     }
 
@@ -201,16 +205,14 @@ class OidcEndpointsConfiguration {
             final CasConfigurationProperties casProperties) {
             return new WebMvcConfigurer() {
                 @Override
-                public void addInterceptors(
-                    @NonNull
-                    final InterceptorRegistry registry) {
+                public void addInterceptors(@NonNull final InterceptorRegistry registry) {
                     val baseEndpoint = getOidcBaseEndpoint(oidcIssuerService, casProperties);
                     LOGGER.info("Registering CAS OpenID Connect endpoints under [{}]. Verify to make sure this value "
                         + "is correctly defined based on your issuer and server settings, defined in CAS configuration. "
                         + "Failure to specify the correct value may interfere with OpenID Connect functionality.", baseEndpoint);
                     registry.addInterceptor(new RefreshableHandlerInterceptor(oauthInterceptor))
                         .order(100)
-                        .addPathPatterns(baseEndpoint.concat("/*"));
+                        .addPathPatterns(baseEndpoint.concat("/**"));
                 }
             };
         }

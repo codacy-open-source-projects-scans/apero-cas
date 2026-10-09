@@ -54,3 +54,95 @@ memory on the authenticator, instead of encrypted and stored on the relying part
 [Device registration](FIDO2-WebAuthn-Authentication-Registration.html) can occur out of band using 
 available CAS APIs, or by allowing users to pass through the registration flow
 as part of the typical multifactor authentication. 
+
+The same passkeys are also offered by [passwordless authentication](../authentication/Passwordless-Authentication-Passkeys.html),
+from the autofill menu of its username field and from its selection menu.
+
+## Related Origins
+
+A passkey is bound to the relying party identifier (`cas.authn.mfa.web-authn.core.relying-party-id`, or the host of the
+CAS server name). When CAS is reached from origins whose domain differs from that identifier, list them under
+`cas.authn.mfa.web-authn.core.allowed-origins`. CAS accepts assertions from those origins and publishes them for
+[WebAuthn related origin requests](https://www.w3.org/TR/webauthn-3/#sctn-related-origins) at `/.well-known/webauthn`:
+
+```json
+{
+  "origins": [
+    "https://sso.example.org",
+    "https://login.example.co.uk"
+  ]
+}
+```
+
+Browsers fetch this document from `https://<relying party identifier>/.well-known/webauthn`, at the root of the host
+and outside the CAS context path, and they only honor a limited number of distinct registrable domains in it. When CAS
+runs under a context path such as `/cas`, route the document onto the path CAS serves, either in the proxy that fronts
+CAS or with the [embedded Tomcat rewrite valve](../installation/Servlet-Container-Embedded-Tomcat-RewriteValve.html)
+registered on the engine:
+
+```
+RewriteRule ^/\.well-known/webauthn$ /cas/.well-known/webauthn [L]
+```
+
+## Passkey Endpoints
+
+CAS publishes the [passkey endpoints metadata](https://www.w3.org/TR/passkey-endpoints/) at
+`/.well-known/passkey-endpoints`, which password managers and passkey providers read to send users to the pages
+where passkeys are created (`enroll`) and managed (`manage`):
+
+```json
+{
+  "enroll": "https://sso.example.org/cas/account",
+  "manage": "https://sso.example.org/cas/account"
+}
+```
+
+Each URL is taken from CAS settings. When one is not set and [account management](../registration/Account-Management-Overview.html) is enabled, it points to the
+account profile, where WebAuthn devices are listed and registered; otherwise it is left out,
+and an empty document still tells clients that CAS supports passkeys. Like the related origins document, clients fetch it from
+the root of the relying party identifier's host, so route it onto the CAS context path the same way:
+
+```
+RewriteRule ^/\.well-known/passkey-endpoints$ /cas/.well-known/passkey-endpoints [L]
+```
+
+## Signal API
+
+After a successful WebAuthn authentication, CAS uses the [WebAuthn Signal API](https://www.w3.org/TR/webauthn-3/#sctn-signal-methods),
+where the browser supports it, to report the passkeys it still accepts for the user and the user's current name and
+display name. Password managers and platform authenticators can then stop offering passkeys that were removed from
+CAS and show the account as it is named in CAS. Browsers without the Signal API ignore this.
+
+## Passkey Provider Names
+
+Each registration keeps the AAGUID that identifies the authenticator or passkey provider that created it. When the
+attestation does not name the device, which is the case for synced passkeys, the
+[account profile](../registration/Account-Management-Overview.html) shows the provider name, such as
+*Google Password Manager*, *1Password* or *Apple Passwords*, from a bundled snapshot of the community
+[passkey provider AAGUID list](https://github.com/passkeydeveloper/passkey-authenticator-aaguids). The registration
+page shows the same name, with the provider's icon from that list, right after a passkey is registered. Providers that
+send an all-zero AAGUID, and devices registered before CAS kept the AAGUID, stay unnamed.
+
+## Passkey Upgrades
+
+CAS can offer a passkey to users who sign in with a username and password, without a separate enrollment step, using
+[WebAuthn conditional create](https://www.w3.org/TR/webauthn-3/#dom-credentialmediationrequirement-conditional).
+Right after the password login, CAS shows a short intermediate page that asks the browser to create a passkey for the account. If
+the browser's password manager has just filled in the password for that account, it may create the passkey on its own,
+usually with no prompt; otherwise the request fails silently. Either way the page continues to the application within
+a few seconds, and browsers that do not support conditional create continue immediately.
+
+<div class="alert alert-info">:information_source: <strong>Passkey Upgrades</strong><p>
+Passkey upgrades must be explicitly enabled in CAS configuration. Then, note that this feature also only takes effect when
+WebAuthn is allowed for primary authentication and when untrusted attestation is allowed. Review CAS settings to 
+ensure all features are correctly enabled.
+</p></div>
+
+The intermediate page is shown only when the login was completed with a password typed in that login, and the account may register
+another device: it has no device yet, or multiple registration is turned on. The
+passkey is named after the username that was typed, so that the password manager can match it with the saved password,
+and it belongs to the authenticated principal. It is listed with its provider's name, such as *Google Password Manager*,
+or as *Passkey*. 
+
+Conditional create is supported by recent versions of Chrome with Google Password Manager and Safari
+with iCloud Keychain, and by many third-party password managers.

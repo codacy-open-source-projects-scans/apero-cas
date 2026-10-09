@@ -16,12 +16,11 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import com.google.common.collect.Iterables;
 import lombok.Builder;
 import lombok.Getter;
-import lombok.experimental.SuperBuilder;
+import lombok.SuperBuilder;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import net.shibboleth.shared.resolver.CriteriaSet;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.opensaml.core.criterion.SatisfyAnyCriterion;
 import org.opensaml.saml.metadata.criteria.entity.impl.EvaluableEntityRoleEntityDescriptorCriterion;
@@ -42,7 +41,7 @@ import org.springframework.util.Assert;
 @Slf4j
 @Monitorable
 public class SamlRegisteredServiceDefaultCachingMetadataResolver implements SamlRegisteredServiceCachingMetadataResolver {
-    private final LoadingCache<@NonNull SamlRegisteredServiceCacheKey, CachedMetadataResolverResult> cache;
+    private final LoadingCache<SamlRegisteredServiceCacheKey, CachedMetadataResolverResult> cache;
 
     @Getter
     private final OpenSamlConfigBean openSamlConfigBean;
@@ -51,7 +50,7 @@ public class SamlRegisteredServiceDefaultCachingMetadataResolver implements Saml
 
     public SamlRegisteredServiceDefaultCachingMetadataResolver(
         final CasConfigurationProperties casProperties,
-        final CacheLoader<@NonNull SamlRegisteredServiceCacheKey, CachedMetadataResolverResult> loader,
+        final CacheLoader<SamlRegisteredServiceCacheKey, CachedMetadataResolverResult> loader,
         final OpenSamlConfigBean openSamlConfigBean) {
 
         this.openSamlConfigBean = openSamlConfigBean;
@@ -141,26 +140,8 @@ public class SamlRegisteredServiceDefaultCachingMetadataResolver implements Saml
         final SamlRegisteredService service,
         final CriteriaSet criteriaSet,
         final SamlRegisteredServiceCacheKey cacheKey) {
-
-        val cachedEntry = cache
-            .asMap()
-            .values()
-            .stream()
-            .filter(Objects::nonNull)
-            .map(Unchecked.function(res -> {
-                val entity = res.getMetadataResolver().resolveSingle(criteriaSet);
-                return Optional.ofNullable(entity)
-                    .map(e -> MetadataResolverCacheQueryResult.builder().result(res).entityDescriptor(Optional.of(e)).build());
-            }))
-            .filter(Optional::isPresent)
-            .flatMap(Optional::stream)
-            .filter(MetadataResolverCacheQueryResult::isValid)
-            .findFirst();
-
-        if (cachedEntry.isPresent() && cachedEntry.get().isValid()) {
-            return cachedEntry.get();
-        }
-        LOGGER.debug("Loading metadata resolver from the cache using [{}]", cacheKey.getCacheKey());
+        LOGGER.debug("Loading metadata resolver from the cache using [{}] for criteria [{}]",
+            cacheKey.getCacheKey(), criteriaSet);
         val cacheResult = Objects.requireNonNull(cache.get(cacheKey));
         LOGGER.debug("Loaded and cached SAML metadata [{}] from [{}]",
             cacheResult.getMetadataResolver().getId(), service.getMetadataLocation());
@@ -176,7 +157,7 @@ public class SamlRegisteredServiceDefaultCachingMetadataResolver implements Saml
     @SuperBuilder
     @Getter
     @SuppressWarnings("UnusedMethod")
-    private static final class MetadataResolutionResult {
+    static final class MetadataResolutionResult {
         private final boolean valid;
 
         private final Optional<EntityDescriptor> entityDescriptor;

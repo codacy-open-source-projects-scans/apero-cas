@@ -1,4 +1,6 @@
-description = "Apereo CAS Consent JDBC Support"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Stores user consent decisions in a JDBC-compatible database for attribute release and privacy workflows."
 ext {
     publishMetadata = true
     projectMetadata = [
@@ -37,12 +39,12 @@ dependencies {
     testImplementation project(":core:cas-server-core-webflow")
     testImplementation project(":core:cas-server-core-notifications")
     testImplementation project(":core:cas-server-core-scripting")
+    testImplementation project(":core:cas-server-core-multitenancy")
 
     testImplementation project(":support:cas-server-support-person-directory")
     testImplementation project(":support:cas-server-support-webconfig")
     testImplementation project(":support:cas-server-support-thymeleaf")
     testImplementation project(":support:cas-server-support-themes")
-    
     testImplementation project(path: ":core:cas-server-core-authentication", configuration: "tests")
     testImplementation project(path: ":core:cas-server-core-authentication-api", configuration: "tests")
     testImplementation project(path: ":core:cas-server-core-util-api", configuration: "tests")

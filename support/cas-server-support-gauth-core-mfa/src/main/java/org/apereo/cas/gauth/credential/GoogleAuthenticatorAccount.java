@@ -4,7 +4,7 @@ import module java.base;
 import org.apereo.cas.authentication.OneTimeTokenAccount;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import lombok.NoArgsConstructor;
-import lombok.experimental.SuperBuilder;
+import lombok.SuperBuilder;
 
 /**
  * This is {@link GoogleAuthenticatorAccount}.
@@ -35,6 +35,9 @@ public class GoogleAuthenticatorAccount extends OneTimeTokenAccount {
             .scratchCodes(acct.getScratchCodes())
             .registrationDate(acct.getRegistrationDate())
             .source(acct.getSource())
+            .tenant(acct.getTenant())
+            .lastUsedDateTime(acct.getLastUsedDateTime())
+            .properties(new ArrayList<>(acct.getProperties()))
             .build();
     }
 

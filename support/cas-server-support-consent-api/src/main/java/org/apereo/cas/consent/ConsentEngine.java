@@ -44,10 +44,11 @@ public interface ConsentEngine extends Serializable {
      * @param registeredService the registered service
      * @param authentication    the authentication
      * @return the consent decision
+     * @throws Throwable the throwable
      */
     ConsentDecision findConsentDecision(Service service,
                                         RegisteredService registeredService,
-                                        Authentication authentication);
+                                        Authentication authentication) throws Throwable;
 
     /**
      * Gets consentable attributes.
@@ -73,7 +74,7 @@ public interface ConsentEngine extends Serializable {
     Map<String, List<Object>> resolveConsentableAttributesFrom(ConsentDecision decision);
 
     /**
-     * Is consent required?
+     * Determines whether consent is required.
      *
      * @param service           the service
      * @param registeredService the registered service
@@ -86,7 +87,8 @@ public interface ConsentEngine extends Serializable {
     /**
      * Gets consent repository.
      *
+     * @param tenantId the tenant id
      * @return the consent repository
      */
-    ConsentRepository getConsentRepository();
+    ConsentRepository toConsentRepository(String tenantId);
 }

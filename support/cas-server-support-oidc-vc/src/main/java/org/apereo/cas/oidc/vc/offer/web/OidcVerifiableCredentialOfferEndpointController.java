@@ -1,19 +1,25 @@
 package org.apereo.cas.oidc.vc.offer.web;
 
 import module java.base;
+import org.apereo.cas.authentication.credential.BasicIdentifiableCredential;
 import org.apereo.cas.oidc.OidcConfigurationContext;
 import org.apereo.cas.oidc.OidcConstants;
 import org.apereo.cas.oidc.vc.offer.OidcVerifiableCredentialOfferService;
+import org.apereo.cas.oidc.vc.services.OidcVerifiableCredentialPolicyUtils;
+import org.apereo.cas.services.OidcRegisteredService;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.BaseOAuth20Controller;
 import org.apereo.cas.util.LoggingUtils;
+import org.apereo.cas.util.RegexUtils;
+import org.apereo.cas.util.function.FunctionUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.apache.commons.lang3.StringUtils;
 import org.pac4j.jee.context.JEEContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -85,6 +91,7 @@ public class OidcVerifiableCredentialOfferEndpointController extends BaseOAuth20
      * @param httpRequest  the http request
      * @param httpResponse the http response
      * @return the response entity
+     * @throws Throwable the throwable
      */
     @PostMapping(value = {
         '/' + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.VC_CREDENTIAL_OFFER_TRANSACTIONS_URL,
@@ -95,29 +102,52 @@ public class OidcVerifiableCredentialOfferEndpointController extends BaseOAuth20
     public ResponseEntity handle(
         @RequestBody final OidcVerifiableCredentialTransactionRequest request,
         final HttpServletRequest httpRequest,
-        final HttpServletResponse httpResponse) {
+        final HttpServletResponse httpResponse) throws Throwable {
         val context = new JEEContext(httpRequest, httpResponse);
         val profile = OAuth20Utils.getAuthenticatedUserProfile(context, getConfigurationContext().getSessionStore());
         LOGGER.debug("Checking credential configuration IDs for [{}]", profile.getId());
 
-        val credentialConfigurationIds = configurationContext.getCasProperties().getAuthn().getOidc().getVc()
-            .getIssuer().getCredentialConfigurations().keySet();
+        val clientId = profile.getAttribute(OAuth20Constants.CLIENT_ID).toString();
+        val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(
+            getConfigurationContext().getServicesManager(), clientId, OidcRegisteredService.class);
+
+        val vcProperties = configurationContext.getCasProperties().getAuthn().getOidc().getVc();
+        val credentialConfigurationIds = OidcVerifiableCredentialPolicyUtils.resolveAllowedCredentialConfigurationIds(
+            registeredService, vcProperties.getIssuer().getCredentialConfigurations().keySet());
         if (credentialConfigurationIds.isEmpty() || !credentialConfigurationIds.containsAll(request.credentialConfigurationIds())) {
+            LOGGER.warn("Client [{}] requested credential configurations [{}] but is only allowed [{}]",
+                clientId, request.credentialConfigurationIds(), credentialConfigurationIds);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(Map.of("error", "Unauthorized credential configuration id requested"));
         }
-        val clientId = profile.getAttribute(OAuth20Constants.CLIENT_ID).toString();
-        val offer = credentialOfferService.create(clientId, request.principal(), request.credentialConfigurationIds());
-        val txCode = offer.getGrants().getPreAuthorizedCodeGrant().getTxCode();
+        val person = configurationContext.getPrincipalResolver()
+            .resolve(new BasicIdentifiableCredential(request.principal()));
+
+        if (StringUtils.isNotBlank(vcProperties.getOffer().getRequiredPrincipalAttribute())
+            && StringUtils.isNotBlank(vcProperties.getOffer().getRequiredPrincipalAttributeValue())) {
+            val attributeValue = Objects.requireNonNull(person).getAttributes().get(vcProperties.getOffer().getRequiredPrincipalAttribute());
+            val pattern = RegexUtils.createPattern(vcProperties.getOffer().getRequiredPrincipalAttributeValue());
+            if (attributeValue == null || attributeValue.stream().noneMatch(value -> RegexUtils.find(pattern, value.toString()))) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "Unauthorized principal for credential offer transaction"));
+            }
+        }
+
+        Objects.requireNonNull(person, "Unable to resolve principal for credential offer transaction");
+        val offer = credentialOfferService.create(clientId, person.getId(), request.credentialConfigurationIds());
+        val transactionId = offer.getTransactionId();
         val offerUri = getConfigurationContext().getCasProperties().getServer().getPrefix()
             + '/' + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.VC_CREDENTIAL_OFFER_URL
-            + '/' + txCode;
-        return ResponseEntity.ok(
-            Map.of(
-                "transactionId", txCode,
-                "credentialOfferUri", offerUri
-            )
-        );
+            + '/' + transactionId;
+
+        val body = new LinkedHashMap<String, Object>();
+        body.put("transactionId", transactionId);
+        body.put("credentialOfferUri", offerUri);
+        body.put("credentialOfferLink", "openid-credential-offer://?credential_offer_uri="
+            + URLEncoder.encode(offerUri, StandardCharsets.UTF_8));
+        val transactionCode = offer.getGrants().getPreAuthorizedCodeGrant().getTransactionCode();
+        FunctionUtils.doIfNotNull(transactionCode, _ -> body.put("txCode", transactionCode.getValue()));
+        return ResponseEntity.ok(body);
     }
 
     public record OidcVerifiableCredentialTransactionRequest(

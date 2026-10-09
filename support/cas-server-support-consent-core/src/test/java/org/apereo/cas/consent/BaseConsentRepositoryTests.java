@@ -11,6 +11,7 @@ import org.apereo.cas.config.CasCoreCookieAutoConfiguration;
 import org.apereo.cas.config.CasCoreLogoutAutoConfiguration;
 import org.apereo.cas.config.CasCoreMultifactorAuthenticationAutoConfiguration;
 import org.apereo.cas.config.CasCoreMultifactorAuthenticationWebflowAutoConfiguration;
+import org.apereo.cas.config.CasCoreMultitenancyAutoConfiguration;
 import org.apereo.cas.config.CasCoreNotificationsAutoConfiguration;
 import org.apereo.cas.config.CasCoreScriptingAutoConfiguration;
 import org.apereo.cas.config.CasCoreServicesAutoConfiguration;
@@ -32,6 +33,8 @@ import lombok.Getter;
 import lombok.val;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -49,14 +52,20 @@ import static org.junit.jupiter.api.Assertions.*;
 @SpringBootTest(classes = BaseConsentRepositoryTests.SharedTestConfiguration.class)
 @Getter
 @ExtendWith(CasTestExtension.class)
+@ResourceLock(value = "consentRepository", mode = ResourceAccessMode.READ_WRITE)
 public abstract class BaseConsentRepositoryTests {
-    protected static final DefaultConsentDecisionBuilder BUILDER = new DefaultConsentDecisionBuilder(CipherExecutor.noOpOfSerializableToString());
+    protected static final DefaultConsentDecisionBuilder BUILDER =
+        new DefaultConsentDecisionBuilder(CipherExecutor.noOpOfSerializableToString());
 
     protected static final Service SVC = RegisteredServiceTestUtils.getService();
 
     protected static final BaseRegisteredService REG_SVC = RegisteredServiceTestUtils.getRegisteredService(SVC.getId());
 
     protected static final Map<String, List<Object>> ATTR = CollectionUtils.wrap("attribute", List.of("value"));
+
+    protected static final Service SVC2 = RegisteredServiceTestUtils.getService2();
+
+    protected static final BaseRegisteredService REG_SVC2 = RegisteredServiceTestUtils.getRegisteredService(SVC2.getId());
 
     @Autowired
     protected ConfigurableApplicationContext applicationContext;
@@ -87,11 +96,11 @@ public abstract class BaseConsentRepositoryTests {
         decision = repo.storeConsentDecision(decision);
         assertNotNull(decision);
 
-        val d = repo.findConsentDecision(SVC, REG_SVC, CoreAuthenticationTestUtils.getAuthentication(user));
-        assertNotNull(d);
-        assertEquals(user, d.getPrincipal());
+        val consentDecision = repo.findConsentDecision(SVC, REG_SVC, CoreAuthenticationTestUtils.getAuthentication(user));
+        assertNotNull(consentDecision);
+        assertEquals(user, consentDecision.getPrincipal());
 
-        assertTrue(repo.deleteConsentDecision(d.getId(), d.getPrincipal()));
+        assertTrue(repo.deleteConsentDecision(consentDecision.getId(), consentDecision.getPrincipal()));
         await().untilAsserted(() -> assertNull(repo.findConsentDecision(SVC, REG_SVC,
             CoreAuthenticationTestUtils.getAuthentication(user))));
 
@@ -101,7 +110,6 @@ public abstract class BaseConsentRepositoryTests {
     void verifyDeleteRecordsForPrincipal() throws Throwable {
         val user = getUser();
         val repo = getRepository();
-        repo.deleteAll();
         val decision = BUILDER.build(SVC, REG_SVC, user, ATTR);
 
         decision.setId(200);
@@ -112,8 +120,43 @@ public abstract class BaseConsentRepositoryTests {
             assertNull(repo.findConsentDecision(SVC, REG_SVC, CoreAuthenticationTestUtils.getAuthentication(user))));
     }
 
+    @Test
+    void verifyMultipleDecisionsForPrincipal() throws Throwable {
+        val user = getUser();
+        val otherUser = getOtherUser();
+        val repo = getRepository();
+
+        val first = repo.storeConsentDecision(BUILDER.build(SVC, REG_SVC, user, ATTR));
+        val second = repo.storeConsentDecision(BUILDER.build(SVC2, REG_SVC2, user, ATTR));
+        val third = repo.storeConsentDecision(BUILDER.build(SVC, REG_SVC, otherUser, ATTR));
+        assertEquals(3, Stream.of(first.getId(), second.getId(), third.getId()).distinct().count());
+
+        assertEquals(2, repo.findConsentDecisions(user).size());
+        assertEquals(1, repo.findConsentDecisions(otherUser).size());
+        assertEquals(SVC.getId(), repo.findConsentDecision(SVC, REG_SVC, CoreAuthenticationTestUtils.getAuthentication(user)).getService());
+        assertEquals(SVC2.getId(), repo.findConsentDecision(SVC2, REG_SVC2, CoreAuthenticationTestUtils.getAuthentication(user)).getService());
+        assertNull(repo.findConsentDecision(SVC2, REG_SVC2, CoreAuthenticationTestUtils.getAuthentication(otherUser)));
+
+        val fourth = repo.storeConsentDecision(BUILDER.build(SVC2, REG_SVC2, otherUser, ATTR));
+        val removedId = Math.min(third.getId(), fourth.getId());
+        val retained = removedId == third.getId() ? fourth : third;
+        assertTrue(repo.deleteConsentDecision(removedId, otherUser));
+        val remaining = repo.findConsentDecisions(otherUser);
+        assertEquals(1, remaining.size());
+        assertEquals(retained.getService(), remaining.iterator().next().getService());
+
+        assertTrue(repo.deleteConsentDecisions(user));
+        assertNull(repo.findConsentDecision(SVC, REG_SVC, CoreAuthenticationTestUtils.getAuthentication(user)));
+        assertNull(repo.findConsentDecision(SVC2, REG_SVC2, CoreAuthenticationTestUtils.getAuthentication(user)));
+        assertEquals(1, repo.findConsentDecisions(otherUser).size());
+    }
+
     protected String getUser() {
         return RandomUtils.randomAlphanumeric(8);
+    }
+
+    protected String getOtherUser() {
+        return getUser();
     }
 
     @SpringBootTestAutoConfigurations
@@ -131,6 +174,7 @@ public abstract class BaseConsentRepositoryTests {
         CasCoreMultifactorAuthenticationAutoConfiguration.class,
         CasCoreMultifactorAuthenticationWebflowAutoConfiguration.class,
         CasCoreAuthenticationAutoConfiguration.class,
+        CasCoreMultitenancyAutoConfiguration.class,
         CasCoreTicketsAutoConfiguration.class,
         CasCoreAuditAutoConfiguration.class,
         CasWebAppAutoConfiguration.class,

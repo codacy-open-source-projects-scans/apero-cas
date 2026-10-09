@@ -63,17 +63,12 @@ import static org.mockito.Mockito.*;
 @EnableConfigurationProperties(CasConfigurationProperties.class)
 class JsonAttributeDefinitionStoreTests {
 
-    private static final File JSON_FILE = new File(FileUtils.getTempDirectoryPath(), "DefaultAttributeDefinitionStoreTests.json");
-
     private static final ObjectMapper MAPPER = JacksonObjectMapperFactory.builder()
         .defaultTypingEnabled(true).build().toObjectMapper();
 
     @Autowired
     @Qualifier(AttributeDefinitionStore.BEAN_NAME)
     private AttributeDefinitionStore attributeDefinitionStore;
-
-    @Autowired
-    private CasConfigurationProperties casProperties;
 
     @Autowired
     @Qualifier(PrincipalResolver.BEAN_NAME_ATTRIBUTE_REPOSITORY)
@@ -88,6 +83,14 @@ class JsonAttributeDefinitionStoreTests {
         assertFalse(attributes.isEmpty());
         assertTrue(attributes.containsKey("allgroups"));
         assertEquals(List.of("m1/m2/m3/m4"), attributes.get("allgroups"));
+
+        assertTrue(attributes.containsKey("parentAttribute"));
+        val values = attributes.get("parentAttribute");
+        assertTrue(values.contains("m1"));
+        assertTrue(values.contains("m2"));
+        assertTrue(values.contains("m3"));
+        assertTrue(values.contains("m4"));
+        assertTrue(values.contains("someValue"));
     }
 
     @Test
@@ -108,18 +111,6 @@ class JsonAttributeDefinitionStoreTests {
         assertTrue(attributes.get("urn:oid:1.3.6.1.4.1.5923.1.1.1.6").contains("cas-user-id@cas.org"));
     }
 
-    private Map<String, List<Object>> getAllReleasedAttributesForCasUser() throws Throwable {
-        val person = attributeRepository.getPerson("casuser");
-        assertNotNull(person);
-        val policy = new ReturnAllAttributeReleasePolicy();
-        val releasePolicyContext = RegisteredServiceAttributeReleasePolicyContext.builder()
-            .registeredService(CoreAuthenticationTestUtils.getRegisteredService())
-            .service(CoreAuthenticationTestUtils.getService())
-            .applicationContext(applicationContext)
-            .principal(CoreAuthenticationTestUtils.getPrincipal(person.getAttributes()))
-            .build();
-        return policy.getAttributes(releasePolicyContext);
-    }
 
     @Test
     void verifyMappedToMultipleNames() {
@@ -149,7 +140,7 @@ class JsonAttributeDefinitionStoreTests {
             val defn = DefaultAttributeDefinition.builder()
                 .key("givenName")
                 .name("gName")
-                .expiration("PT2S")
+                .expiration("PT5S")
                 .build();
             store.registerAttributeDefinition(defn);
             val attributes = CoreAuthenticationTestUtils.getAttributes();
@@ -388,13 +379,14 @@ class JsonAttributeDefinitionStoreTests {
     }
 
     @Test
-    void verifySerialization() {
+    void verifySerialization() throws Exception {
         val defn = DefaultAttributeDefinition.builder()
             .key("eduPersonPrincipalName")
             .name("urn:oid:1.3.6.1.4.1.5923.1.1.1.6")
             .build();
-        MAPPER.writeValue(JSON_FILE, defn);
-        val read = MAPPER.readValue(JSON_FILE, AttributeDefinition.class);
+        val file = Files.createTempFile("attributeDefinition", ".json").toFile();
+        MAPPER.writeValue(file, defn);
+        val read = MAPPER.readValue(file, AttributeDefinition.class);
         assertEquals(read, defn);
     }
 
@@ -472,21 +464,41 @@ class JsonAttributeDefinitionStoreTests {
 
             when(service.getPublicKey()).thenReturn(mock(RegisteredServicePublicKey.class));
             results = store.resolveAttributeValues("cn", context);
-            assertTrue(results.get().getValue().isEmpty());
+            assertTrue(results.orElseThrow().getValue().isEmpty());
         }
     }
 
+    /**
+     * The store watches its resource and re-imports on change, so the reload is observed through
+     * the definition it produces rather than by waiting a fixed time for the watcher to run.
+     *
+     * @throws Throwable in case of failure
+     */
     @Test
-    void verifyDefinitionsReload() {
-        val resource = casProperties.getAuthn().getAttributeRepository().getAttributeDefinitionStore().getJson().getLocation();
-        assertDoesNotThrow(() -> {
-            try (val store = new JsonAttributeDefinitionStore(resource)) {
-                store.setScope("example.org");
-                Files.setLastModifiedTime(resource.getFile().toPath(), FileTime.from(Instant.now()));
-                Thread.sleep(5_000);
-                store.destroy();
+    void verifyDefinitionsReload() throws Throwable {
+        val file = Files.createTempFile("definitions", ".json").toFile();
+        FileUtils.write(file, definitionsResource("urn:first"), StandardCharsets.UTF_8);
+        try (val store = new JsonAttributeDefinitionStore(new FileSystemResource(file))) {
+            store.setScope("example.org");
+            assertEquals("urn:first", store.locateAttributeDefinition("eduPersonPrincipalName").orElseThrow().getName());
+
+            FileUtils.write(file, definitionsResource("urn:second"), StandardCharsets.UTF_8);
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertEquals("urn:second", store.locateAttributeDefinition("eduPersonPrincipalName").orElseThrow().getName()));
+        }
+    }
+
+    private static String definitionsResource(final String name) {
+        return """
+            {
+              "@class": "java.util.TreeMap",
+              "eduPersonPrincipalName": {
+                "@class": "org.apereo.cas.authentication.attribute.DefaultAttributeDefinition",
+                "key": "eduPersonPrincipalName",
+                "name": "%s"
+              }
             }
-        });
+            """.formatted(name);
     }
 
     @Test
@@ -521,6 +533,18 @@ class JsonAttributeDefinitionStoreTests {
         assertTrue(attributeDefinitionStore.locateAttributeDefinitionByName("interesting-attribute", AttributeDefinition.class).isPresent());
     }
 
+    private Map<String, List<Object>> getAllReleasedAttributesForCasUser() throws Throwable {
+        val person = attributeRepository.getPerson("casuser");
+        assertNotNull(person);
+        val policy = new ReturnAllAttributeReleasePolicy().setExcludedAttributes(Set.of("badAttribute"));
+        val releasePolicyContext = RegisteredServiceAttributeReleasePolicyContext.builder()
+            .registeredService(CoreAuthenticationTestUtils.getRegisteredService())
+            .service(CoreAuthenticationTestUtils.getService())
+            .applicationContext(applicationContext)
+            .principal(CoreAuthenticationTestUtils.getPrincipal(person.getAttributes()))
+            .build();
+        return policy.getAttributes(releasePolicyContext);
+    }
 
     @TestConfiguration(proxyBeanMethods = false)
     static class JsonAttributeDefinitionStoreTestConfiguration {

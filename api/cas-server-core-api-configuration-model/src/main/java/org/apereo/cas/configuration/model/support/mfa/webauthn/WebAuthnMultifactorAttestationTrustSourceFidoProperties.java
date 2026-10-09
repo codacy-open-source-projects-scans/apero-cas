@@ -55,7 +55,7 @@ public class WebAuthnMultifactorAttestationTrustSourceFidoProperties implements 
      * This is the current FIDO Metadata Service BLOB download URL.
      */
     @RequiredProperty
-    private String metadataBlobUrl = "https://mds.fidoalliance.org/";
+    private String metadataBlobUrl = "https://mds3.fidoalliance.org/";
 
     /**
      * Certificate required for PKI to verify the downloaded blob.

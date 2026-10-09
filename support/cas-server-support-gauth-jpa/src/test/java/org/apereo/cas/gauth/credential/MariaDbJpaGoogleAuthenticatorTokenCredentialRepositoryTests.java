@@ -3,16 +3,21 @@ package org.apereo.cas.gauth.credential;
 import module java.base;
 import org.apereo.cas.util.junit.EnabledIfListeningOnPort;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.test.context.TestPropertySource;
 
 /**
  * Test cases for {@link MariaDbJpaGoogleAuthenticatorTokenCredentialRepositoryTests}.
  *
+ * This class shares one physical database and one persistence unit with its sibling test for the
+ * token repository, and its schema generation drops and recreates the tables at startup. The
+ * shared resource keeps the two from running at the same time and pulling the schema out from
+ * under each other.
+ *
  * @author Misagh Moayyed
  * @since 6.0.0
  */
 @TestPropertySource(properties = {
-    "cas.authn.mfa.gauth.jpa.ddl-auto=create",
     "cas.authn.mfa.gauth.jpa.user=root",
     "cas.authn.mfa.gauth.jpa.password=mypass",
     "cas.authn.mfa.gauth.jpa.driver-class=org.mariadb.jdbc.Driver",
@@ -20,6 +25,7 @@ import org.springframework.test.context.TestPropertySource;
     "cas.authn.mfa.gauth.jpa.dialect=org.hibernate.dialect.MariaDBDialect"
 })
 @EnabledIfListeningOnPort(port = 3306)
+@ResourceLock("googleAuthenticatorJpaSchema")
 @Tag("MariaDb")
 class MariaDbJpaGoogleAuthenticatorTokenCredentialRepositoryTests extends JpaGoogleAuthenticatorTokenCredentialRepositoryTests {
 }

@@ -2,15 +2,18 @@ package org.apereo.cas.ticket.registry;
 
 import module java.base;
 import org.apereo.cas.config.CasKafkaTicketRegistryAutoConfiguration;
+import org.apereo.cas.ha.ClusterTopologyManager;
 import org.apereo.cas.ticket.registry.events.KafkaMessagePublishedEvent;
+import org.apereo.cas.ticket.registry.pubsub.commands.BaseMessageQueueCommand;
 import org.apereo.cas.ticket.registry.pubsub.queue.QueueableTicketRegistryMessageReceivedEvent;
+import org.apereo.cas.util.PublisherIdentifier;
 import org.apereo.cas.util.crypto.CipherExecutor;
 import org.apereo.cas.util.junit.EnabledIfListeningOnPort;
 import lombok.Getter;
 import lombok.val;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -19,8 +22,10 @@ import org.springframework.boot.kafka.autoconfigure.metrics.KafkaMetricsAutoConf
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.event.EventListener;
+import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.util.Assert;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * This is {@link KafkaTicketRegistryTests}.
@@ -42,7 +47,7 @@ import org.springframework.util.Assert;
 @Tag("Kafka")
 @EnabledIfListeningOnPort(port = 9092)
 @Getter
-@Execution(ExecutionMode.SAME_THREAD)
+@ResourceLock("ticketRegistry:kafka")
 class KafkaTicketRegistryTests extends BaseTicketRegistryTests {
     @Autowired
     @Qualifier(TicketRegistry.BEAN_NAME)
@@ -52,11 +57,39 @@ class KafkaTicketRegistryTests extends BaseTicketRegistryTests {
     @Qualifier(CipherExecutor.BEAN_NAME_TICKET_REGISTRY_CIPHER_EXECUTOR)
     private CipherExecutor messageQueueCipherExecutor;
 
+    @Autowired
+    @Qualifier("kafkaTicketRegistryClusterTopologyManager")
+    private ClusterTopologyManager kafkaTicketRegistryClusterTopologyManager;
+
+    @Autowired
+    @Qualifier("kafkaTicketRegistryMessageListenerContainer")
+    private ConcurrentMessageListenerContainer<String, BaseMessageQueueCommand> kafkaTicketRegistryMessageListenerContainer;
+
+    @Autowired
+    @Qualifier(PublisherIdentifier.DEFAULT_BEAN_NAME)
+    private PublisherIdentifier messageQueueTicketRegistryIdentifier;
+
     @Override
     protected CipherExecutor setupCipherExecutor() {
         return this.messageQueueCipherExecutor;
     }
+    
+    @RepeatedTest(1)
+    void verifyOperation() throws Exception {
+        val results = kafkaTicketRegistryClusterTopologyManager.discoverMembers();
+        assertFalse(results.isEmpty());
+    }
 
+    /**
+     * Each node must consume in a group of its own. Nodes in one group split the single partition of
+     * each topic, so a ticket added on one node reaches at most one other.
+     */
+    @RepeatedTest(1)
+    void verifyEachNodeConsumesInItsOwnGroup() {
+        assertEquals("cas-ticket-registry-%s".formatted(messageQueueTicketRegistryIdentifier.getId()),
+            kafkaTicketRegistryMessageListenerContainer.getGroupId());
+    }
+    
     @TestConfiguration(proxyBeanMethods = false)
     static class KafkaTicketRegistryTestConfiguration {
         private final CountDownLatch latch = new CountDownLatch(1);

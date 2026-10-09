@@ -13,19 +13,20 @@ import org.apereo.cas.util.MockRequestContext;
 import org.apereo.cas.util.spring.beans.BeanContainer;
 import lombok.val;
 import org.apache.commons.io.IOUtils;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.webflow.execution.RequestContext;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 /**
  * This is {@link WsFederationResponseValidatorTests}.
@@ -43,15 +44,13 @@ import static org.junit.jupiter.api.Assertions.*;
         "cas.authn.wsfed[0].signing-certificate-resources=classpath:adfs-signing.crt",
         "cas.authn.wsfed[0].identity-attribute=upn"
     })
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@AutoConfigureMockMvc
+@SuppressWarnings("removal")
+@ResourceLock("wsFederationHelperClock")
 class WsFederationResponseValidatorTests {
     @Autowired
     @Qualifier("wsFederationResponseValidator")
     private WsFederationResponseValidator wsFederationResponseValidator;
-
-    @Autowired
-    @Qualifier("wsFederationNavigationController")
-    private WsFederationNavigationController wsFederationNavigationController;
 
     @Autowired
     @Qualifier("wsFederationConfigurations")
@@ -66,10 +65,17 @@ class WsFederationResponseValidatorTests {
     private WsFederationHelper wsFederationHelper;
 
     @Autowired
+    @Qualifier("wsFederationCookieManager")
+    private WsFederationCookieManager wsFederationCookieManager;
+
+    @Autowired
     private ConfigurableApplicationContext applicationContext;
-    
+
+    @Autowired
+    @Qualifier("mockMvc")
+    private MockMvc mockMvc;
+
     @Test
-    @Order(2)
     void verifyOperation() throws Throwable {
         val zdt = ZonedDateTime.of(2014, 2, 26, 22, 51, 10, 0, ZoneOffset.UTC);
         val clock = Clock.fixed(zdt.toInstant(), ZoneOffset.UTC);
@@ -80,8 +86,8 @@ class WsFederationResponseValidatorTests {
     }
 
     @Test
-    @Order(1)
     void verifyFailedOperation() throws Throwable {
+        wsFederationHelper.setClock(Clock.systemUTC());
         val context = prepareContext();
         assertThrows(IllegalArgumentException.class, () -> wsFederationResponseValidator.validateWsFederationAuthenticationRequest(context));
     }
@@ -98,11 +104,24 @@ class WsFederationResponseValidatorTests {
         servicesManager.save(registeredService);
 
         val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
-        context.setParameter(CasProtocolConstants.PARAMETER_SERVICE, service.getId());
+        context.setParameter(CasProtocolConstants.PARAMETER_SERVICE, Objects.requireNonNull(service.getId()));
         val wsConfig = wsFederationConfigurations.toList().getFirst();
         val id = wsConfig.getId();
         context.setParameter(WsFederationNavigationController.PARAMETER_NAME, id);
-        wsFederationNavigationController.redirectToProvider(id, context.getHttpServletRequest(), context.getHttpServletResponse());
+        val result = mockMvc.perform(get(WsFederationNavigationController.ENDPOINT_REDIRECT)
+                .param(CasProtocolConstants.PARAMETER_SERVICE, Objects.requireNonNull(service.getId()))
+                .param(WsFederationNavigationController.PARAMETER_NAME, id)
+                .with(request -> {
+                    request.setRemoteAddr("185.86.151.11");
+                    request.setLocalAddr("185.88.151.11");
+                    request.addHeader("User-Agent", "Mozilla/5.0");
+                    return request;
+                }))
+            .andReturn();
+        for (val cookie : result.getResponse().getCookies()) {
+            context.getHttpServletResponse().addCookie(cookie);
+        }
+        wsFederationCookieManager.store(context.getHttpServletRequest(), context.getHttpServletResponse(), id, service, wsConfig);
         context.setRequestCookiesFromResponse();
 
         val wresult = IOUtils.toString(new ClassPathResource("goodTokenResponse.txt").getInputStream(), StandardCharsets.UTF_8);

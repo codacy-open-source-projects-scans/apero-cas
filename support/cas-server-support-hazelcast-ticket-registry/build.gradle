@@ -1,4 +1,6 @@
-description = "Apereo CAS Hazelcast Integration"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Stores CAS tickets in Hazelcast for shared single sign-on state across server nodes."
 ext {
     publishMetadata = true
     projectMetadata = [
@@ -18,7 +20,8 @@ dependencies {
     implementation project(":support:cas-server-support-hazelcast")
 
     api project(":api:cas-server-core-api-util")
-
+    api project(":api:cas-server-core-api-ha")
+    
     implementation libraries.hazelcast
     
     testImplementation project(path: ":core:cas-server-core-authentication", configuration: "tests")

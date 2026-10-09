@@ -7,10 +7,11 @@ category: Multitenancy
 
 # Multitenancy
 
-CAS supports the notion of multitenancy, where a single CAS server can be used to isolate parts of its configuration and policies
-per each tenant that is assigned to a unique url to interact with the CAS server. Each tenant registered with CAS may have its own set of capabilities
-such as authentication strategy and policies. Support for multitenancy is baked into CAS as a first class citizen
-and you will need to configure CAS to enable the feature, register your tenants and define their capabilities.
+CAS supports the notion of multitenancy, where a single CAS server can be used to isolate parts of its configuration
+and policies per each tenant that is assigned to a unique url to interact with the CAS server. Each tenant registered 
+with CAS may have its own set of capabilities such as authentication strategy and policies. Support for multitenancy 
+is baked into CAS as a first class citizen and you will need to configure CAS to enable the feature, register your 
+tenants and define their capabilities.
 
 {% include_cached casproperties.html properties="cas.multitenancy.core" %}
 
@@ -24,6 +25,16 @@ When multitenancy is enabled, registered tenants will each receive their own ded
 
 ```
 /cas/tenants/{TENANT_ID}/...
+```
+ 
+Furthermore, in some cases you may also be able to pass along the tenant id as a request header, 
+and CAS will be able to resolve the tenant definition. This extraction logic is particularly employed
+for actuator endpoints that do support multitenancy:
+
+```bash
+curl --location 
+    'https://sso.example.org/cas/actuator/{ACTUATOR}' \
+    --header 'X-Tenant-Id: {TENANT_ID}'
 ```
 
 ## Actuator Endpoints
@@ -396,7 +407,8 @@ CAS to route requests from `https://sso.example.org/cas/login` to `https://${cas
    
 This setup is useful in scenarios where there is a reverse proxy that sits in front of CAS
 and is able to route traffic for predefined hosts to CAS tenants. For example, the setup below
-for nginx, combined with the tenant definitions, allows CAS to route traffic for `sso.example.com` to the `london` tenant definition that carries 
+for nginx, combined with the tenant definitions, allows CAS to route traffic for `sso.example.com` to 
+the `london` tenant definition that carries 
 its own host name noted above:
 
 ```conf
@@ -430,4 +442,85 @@ public FilterRegistrationBean tenantRoutingFilter() {
 
 {% endtab %}
 
+{% tab multitenancyexamples Attribute Consent %}
+
+The following tenant definition is allowed to define its 
+own [attribute consent storage](../integration/Attribute-Release-Consent.html) via MongoDb. 
+
+Depending on your choice of storage, the proper extension module must be 
+included in your CAS deployment. As ever, please verify that the module does actually support multitenancy. 
+
+```json
+[
+  "java.util.ArrayList",
+  [
+    {
+      "@class": "org.apereo.cas.multitenancy.TenantDefinition",
+      "id": "shire",
+      "properties": {
+        "@class": "java.util.LinkedHashMap",
+        "cas.consent.mongo.host": "localhost",
+        "cas.consent.mongo.port": "27017",
+        "cas.consent.mongo.user-id": "...",
+        "cas.consent.mongo.password": "...",
+        "cas.consent.mongo.collection": "TenantsConsentRepository",
+        "cas.consent.mongo.authentication-database-name": "admin",
+        "cas.consent.mongo.database-name": "consent"
+      }
+    }
+  ]
+]
+```
+    
+In the event that the tenant does not specify its own attribute consent storage, the default storage 
+defined globally in the CAS configuration for the entire CAS deployment will be used.
+
+{% endtab %}
+
 {% endtabs %}
+          
+## Notes on Performance
+
+The current multitenant design resolves the tenant at runtime and dynamically builds the resource access 
+path needed for that tenant. The target resource may be a JDBC database, REST API, LDAP directory, message broker, 
+remote service, or another tenant-specific integration point. This keeps the system flexible and avoids eagerly 
+registering a large number of tenant-specific Spring components, especially when tenants may each choose different 
+endpoints, credentials, protocols, storage backends, or operational policies. It also avoids assuming that 
+all tenants are active at the same time.
+
+The main caveat with this design is performance under concurrent activity. If each tenant 
+operation creates a new resource client, establishes a connection, authenticates, executes the operation,
+and then immediately tears everything down, the system repeatedly pays the cost of setup and cleanup. 
+Depending on the resource type, this overhead may include TCP connection establishment, TLS negotiation, 
+authentication or bind operations, connection validation, session initialization, client construction, 
+metadata discovery, and remote service cleanup. For a small number of tenants with light or sporadic 
+usage, this may be acceptable. However, with moderately active tenants, especially when CAS flows perform 
+multiple tenant-backed operations per request, repeated setup and teardown can introduce latency spikes 
+and increase load on both CAS and the downstream tenant resources.
+
+For a deployment with a relatively small number of tenants, such as around 20, the current approach can 
+be viable if traffic is moderate, resource setup is fast, downstream systems are nearby and reliable, 
+and the number of tenant-specific operations per CAS request is low. That said, the risk increases with 
+concurrent logins, service lookups, consent checks, profile lookups, attribute resolution, audit writes, 
+or other operations that occur during authentication and protocol flows. The determining factor is less the 
+total number of configured tenants and more the number of active tenants, concurrent requests per tenant, 
+tenant-specific operations per request, and the average and tail latency of each full setup/operation/teardown cycle.
+
+A possible future improvement is to retain the dynamic tenant-resolution model 
+but avoid tearing down expensive resource infrastructure immediately after every operation. 
+Instead, CAS could use a lazy, bounded, tenant-aware registry or cache for resource clients and 
+connection-capable components. Tenant-specific resources would be created only when first needed, 
+reused while the tenant remains active, and closed after an idle timeout, health failure, configura
+tion change, or cache eviction. For resources that support pooling, such as JDBC, LDAP, HTTP, 
+or messaging clients, small pools with conservative limits can allow active tenants to benefit 
+from reuse while preventing inactive tenants from consuming resources indefinitely.
+
+This future possible approach provides a better balance between flexibility and performance. It avoids the cost and complexity 
+of eagerly registering every possible tenant resource as a Spring bean, while also avoiding the latency and 
+churn of creating and destroying expensive clients or connections on every request. Over time, the implementation 
+can be enhanced with global resource limits, idle eviction, per-tenant metrics, health checks, circuit breakers 
+for unhealthy downstream systems, connection and request timeout controls, configuration refresh support, 
+secret rotation support, and operational safeguards to prevent one tenant from exhausting shared CAS 
+resources or overwhelming downstream services.
+
+We might consider improving this design in future iterations based on community demand and deployment experience.

@@ -7,7 +7,7 @@ import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
-import org.apereo.cas.ticket.registry.TicketCompactor;
+import org.apereo.cas.ticket.registry.compact.TicketCompactor;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +38,9 @@ class OAuth20RefreshTokenCompactorTests extends AbstractOAuth20Tests {
         servicesManager.save(registeredService);
         val token = defaultRefreshTokenFactory.create(service, authentication, null, scopes,
             clientId, null, Map.of(), responseType, grantType);
+        val authorizationDetails = List.of(new LinkedHashMap<String, Object>(Map.of("type", "openid_credential",
+            "credential_configuration_id", "UniversityDegreeCredential")));
+        token.setAuthorizationDetails(authorizationDetails);
         assertSame(OAuth20RefreshToken.class, oauth20RefreshTokenTicketCompactor.getTicketType());
         val compacted = oauth20RefreshTokenTicketCompactor.compact(token);
         assertNotNull(compacted);
@@ -48,6 +51,7 @@ class OAuth20RefreshTokenCompactorTests extends AbstractOAuth20Tests {
         assertEquals(result.getResponseType(), token.getResponseType());
         assertEquals(result.getGrantType(), token.getGrantType());
         assertEquals(result.getAuthentication().getPrincipal(), token.getAuthentication().getPrincipal());
+        assertEquals(authorizationDetails, result.getAuthorizationDetails());
     }
 
     static Stream<Arguments> codeProvider() {

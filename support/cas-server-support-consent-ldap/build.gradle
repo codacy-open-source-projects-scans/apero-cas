@@ -1,4 +1,6 @@
-description = "Apereo CAS Consent LDAP Support"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Stores user consent decisions in an LDAP directory for attribute release and privacy workflows."
 ext {
 
     publishMetadata = true
@@ -50,4 +52,6 @@ dependencies {
     testImplementation project(":core:cas-server-core-authentication-mfa")
     testImplementation project(":core:cas-server-core-webflow-mfa")
     testImplementation project(":core:cas-server-core-webflow")
+    testImplementation project(":core:cas-server-core-multitenancy")
+    testImplementation project(":core:cas-server-core-services-authentication")
 }

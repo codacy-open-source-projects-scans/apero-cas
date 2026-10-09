@@ -24,8 +24,10 @@ class OAuth20DefaultDeviceTokenFactoryTests extends AbstractOAuth20Tests {
         val registeredService = getRegisteredService("https://device.oauth.org", "clientid-device", "secret-at");
         registeredService.setDeviceTokenExpirationPolicy(new DefaultRegisteredServiceOAuthDeviceTokenExpirationPolicy("PT100S"));
         servicesManager.save(registeredService);
-        val token = defaultDeviceTokenFactory.createDeviceCode(RegisteredServiceTestUtils.getService("https://device.oauth.org"));
+        val token = defaultDeviceTokenFactory.createDeviceCode(
+            RegisteredServiceTestUtils.getService("https://device.oauth.org"), List.of(), registeredService.getClientId());
         assertNotNull(token);
+        assertEquals(registeredService.getClientId(), token.getClientId());
         assertNotNull(defaultAccessTokenFactory.get(OAuth20Code.class));
     }
 }

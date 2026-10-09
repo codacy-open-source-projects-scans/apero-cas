@@ -399,6 +399,28 @@ public class LdapUtils {
     }
 
     /**
+     * Determines whether the given filter template makes use of the named parameter, either
+     * by name (i.e. {@code {surrogate}}) or by its positional index (i.e. {@code {1}}). Values
+     * handed to {@link #newLdaptiveSearchFilter(String, List, List)} are bound only when the
+     * template refers to them, so a filter that omits a parameter silently ignores it. Callers
+     * whose filter is expected to constrain a search by that parameter should verify it first.
+     * Filters defined as external scripts build their own template and are always accepted.
+     *
+     * @param filterQuery the filter query
+     * @param paramName   the parameter name
+     * @param index       the positional index of the parameter
+     * @return true/false
+     */
+    public static boolean containsSearchFilterParameter(final String filterQuery, final String paramName, final int index) {
+        if (StringUtils.isBlank(filterQuery)) {
+            return false;
+        }
+        return ResourceUtils.doesResourceExist(filterQuery)
+               || filterQuery.contains('{' + paramName + '}')
+               || filterQuery.contains("{" + index + '}');
+    }
+
+    /**
      * New search executor.
      *
      * @param baseDn      the base dn
@@ -524,7 +546,7 @@ public class LdapUtils {
                 }
             }
         }
-        LOGGER.debug("Initializing ldap connection pool for [{}] and bindDn [{}]", props.getLdapUrl(), props.getBindDn());
+        LOGGER.debug("Initializing LDAP connection pool for [{}] and bindDn [{}]", props.getLdapUrl(), props.getBindDn());
         pooledCf.initialize();
         return pooledCf;
     }

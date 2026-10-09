@@ -8,6 +8,7 @@ import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import net.shibboleth.shared.resolver.CriteriaSet;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.file.PathUtils;
@@ -17,6 +18,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.opensaml.core.criterion.EntityIdCriterion;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
@@ -43,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.*;
 })
 @Slf4j
 @Tag("Git")
+@ResourceLock("gitSamlMetadataRepository")
 class GitSamlRegisteredServiceMetadataResolverTests extends BaseGitSamlMetadataTests {
     @Autowired
     @Qualifier("gitSamlRegisteredServiceRepositoryScheduler")
@@ -98,6 +102,8 @@ class GitSamlRegisteredServiceMetadataResolverTests extends BaseGitSamlMetadataT
         assertTrue(resolver.supports(service));
         assertTrue(resolver.isAvailable(service));
         assertFalse(resolver.supports(null));
+        assertTrue(resolver.resolve(service).isEmpty());
+        service.setRequireSignedRoot(false);
         val resolvers = resolver.resolve(service);
         assertFalse(resolvers.isEmpty());
         service.setMetadataLocation("https://example.com/endswith.git");
@@ -108,6 +114,26 @@ class GitSamlRegisteredServiceMetadataResolverTests extends BaseGitSamlMetadataT
             resolver.resolve(null, null);
             metadataManager.store(null);
         });
+    }
+
+    @Test
+    void verifyEntityIdCriterionSelectsMetadataDocument() throws Throwable {
+        val entityId = "https://carmenwiki.osu.edu/shibboleth";
+        val metadata = IOUtils.toString(new ClassPathResource("sp-metadata.xml").getInputStream(), StandardCharsets.UTF_8);
+        val signature = IOUtils.toString(new ClassPathResource("cert.pem").getInputStream(), StandardCharsets.UTF_8);
+        val metadataManager = resolver.getMetadataManager().orElseThrow();
+        metadataManager.removeAll();
+        metadataManager.store(SamlMetadataDocument.builder().name("SP").value(metadata).signature(signature).build());
+        metadataManager.store(SamlMetadataDocument.builder().name("Other").signature(signature)
+            .value(metadata.replace(entityId, "https://other.example.org")).build());
+
+        val service = new SamlRegisteredService();
+        service.setName("SAML Service");
+        service.setServiceId("^https://.+$");
+        service.setMetadataLocation("git://");
+        service.setRequireSignedRoot(false);
+        val resolvers = resolver.resolve(service, new CriteriaSet(new EntityIdCriterion(entityId)));
+        assertEquals(1, resolvers.size());
     }
 
     @Test

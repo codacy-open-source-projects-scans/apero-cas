@@ -76,6 +76,11 @@ ext.libraries = [
                     exclude(group: "ch.qos.logback", module: "logback-classic")
                 }
         ],
+        netbeanslibprofiler          : [
+                dependencies.create(libs.netbeans.lib.profiler.get()) {
+                    exclude(group: "org.slf4j", module: "slf4j-api")
+                }
+        ],
         permitio          : [
                 dependencies.create(libs.permit.sdk.java.get()) {
                     exclude(group: "org.slf4j", module: "slf4j-api")
@@ -588,8 +593,6 @@ ext.libraries = [
                 },
                 dependencies.create(libs.commons.lang3.get()) {
                 },
-                dependencies.create(libs.commons.lang.get()) {
-                },
                 dependencies.create(libs.jool.get()) {
                 },
                 dependencies.create(libs.commons.collections.get()) {
@@ -643,6 +646,8 @@ ext.libraries = [
             exclude(group: "commons-beanutils", module: "commons-beanutils")
             exclude(group: "org.quartz-scheduler", module: "quartz")
             exclude(group: "log4j", module: "log4j")
+            exclude(group: "com.fasterxml.jackson.core", module: "jackson-annotations")
+            exclude(group: "com.fasterxml.jackson.core", module: "jackson-core")
         },
         cqengine                   : [
                 dependencies.create(libs.cqengine.get()) {
@@ -1205,21 +1210,20 @@ ext.libraries = [
                 }
         ],
         springrabbitmq                 : [
-                dependencies.create(libs.spring.boot.starter.rabbitmq.get()) {
+                dependencies.create(libs.spring.boot.starter.amqp.rabbitmq.get()) {
                     exclude(group: "org.slf4j", module: "slf4j-api")
                     exclude(group: "org.springframework", module: "spring-context")
                     exclude(group: "org.springframework", module: "spring-core")
                     exclude(group: "org.springframework", module: "spring-aop")
                     exclude(group: "org.springframework.boot", module: "spring-boot-starter")
                 },
-                dependencies.create(libs.spring.boot.rabbitmq.get()) {
+                dependencies.create(libs.spring.boot.amqp.rabbitmq.get()) {
                     exclude(group: "org.slf4j", module: "slf4j-api")
                     exclude(group: "org.springframework", module: "spring-context")
                     exclude(group: "org.springframework", module: "spring-core")
                     exclude(group: "org.springframework", module: "spring-aop")
                     exclude(group: "org.springframework.boot", module: "spring-boot-starter")
-                },
-                dependencies.create(libs.spring.rabbit.get())
+                }
         ],
         thymeleaf                  : [
                 dependencies.create(libs.thymeleaf.spring6.get()) {
@@ -1721,8 +1725,6 @@ ext.libraries = [
                 },
                 dependencies.create(libs.junit.platform.launcher.get()) {
                 },
-                dependencies.create(libs.google.crypto.tink.get()) {
-                },
                 dependencies.create(libs.awaitility.get()) {
                     exclude(group: "org.hamcrest", module: "hamcrest")
                     exclude(group: "junit", module: "junit")
@@ -2094,10 +2096,6 @@ ext.libraries = [
                 }
         ],
         opensaml                   : [
-                dependencies.create(libs.xercesimpl.get()) {
-                    exclude(group: "commons-codec", module: "commons-codec")
-                    exclude(group: "org.slf4j", module: "slf4j-api")
-                },
                 dependencies.create(libs.opensaml.core.api.get()) {
                     exclude(group: "org.bouncycastle", module: "bcprov-jdk15on")
                     exclude(group: "commons-collections", module: "commons-collections")
@@ -2505,6 +2503,13 @@ ext.libraries = [
                     exclude(group: "tools.jackson.core", module: "jackson-databind")
                     exclude(group: "tools.jackson.core", module: "jackson-annotations")
                     exclude(group: "org.projectlombok", module: "lombok")
+                }
+        ],
+        authlete                     : [
+                dependencies.create(libs.authlete.sd.jwt.get()) {
+                    exclude(group: "com.google.code.gson", module: "gson")
+                },
+                dependencies.create(libs.gson.get()) {
                 }
         ],
         nimbus                     : [
@@ -3122,13 +3127,6 @@ ext.libraries = [
                 },
                 dependencies.create(libs.lettuce.core.get())
         ],
-        lettucemod: [
-                dependencies.create(libs.lettucemod.get()) {
-                    exclude(group: "ch.qos.logback", module: "logback-core")
-                    exclude(group: "ch.qos.logback", module: "logback-classic")
-                    exclude(group: "org.slf4j", module: "slf4j-api")
-                }
-        ],
         springintegration          : [
                 dependencies.create(libs.spring.integration.core.get()) {
                     exclude(group: "org.slf4j", module: "slf4j-api")
@@ -3727,6 +3725,7 @@ ext.libraries = [
                     exclude(group: "org.springframework", module: "spring-webmvc")
                     exclude(group: "org.springframework", module: "spring-context")
                 },
+                dependencies.create(libs.spring.boot.data.redis.get()),
                 dependencies.create(libs.spring.boot.session.redis.get()) {
                     exclude(group: "org.springframework", module: "spring-web")
                     exclude(group: "org.springframework", module: "spring-core")
@@ -3975,10 +3974,6 @@ ext.libraries = [
                 }
         ],
         springws                   : [
-                dependencies.create(libs.xercesimpl.get()) {
-                    exclude(group: "commons-codec", module: "commons-codec")
-                    exclude(group: "org.slf4j", module: "slf4j-api")
-                },
                 dependencies.create(libs.spring.boot.starter.web.services.get()) {
                     exclude(group: "org.apache.wss4j", module: "wss4j-ws-security-dom")
                     exclude(group: "org.apache.wss4j", module: "wss4j-ws-security-common")
@@ -4164,6 +4159,9 @@ ext.libraries = [
                 }
         ],
         webjarspalantir : [
+                dependencies.create(libs.jquery.contextmenu.get()) {
+                    exclude(group: "org.webjars", module: "jquery")
+                },
                 dependencies.create(libs.chart.js.core.get()) {
                     exclude(group: "org.webjars", module: "popper.js")
                     exclude(group: "org.webjars", module: "jquery")
@@ -4187,6 +4185,20 @@ ext.libraries = [
                 dependencies.create(libs.mermaid.get()) {
                     exclude(group: "org.webjars", module: "jquery")
                     exclude(group: "org.webjars.npm", module: "mermaid-js__parser")
+                    exclude(group: "org.webjars.npm", module: "uuid")
+                    exclude(group: "org.webjars.npm", module: "cytoscape-cose-bilkent")
+                    exclude(group: "org.webjars.npm", module: "d3-sankey")
+                    exclude(group: "org.webjars.npm", module: "d3-dsv")
+                },
+                dependencies.create(libs.cytoscape.cose.bilkent.get()) {
+                    exclude(group: "org.webjars.npm", module: "cose-base")
+                },
+                dependencies.create(libs.d3.sankey.get()) {
+                    exclude(group: "org.webjars.npm", module: "d3-array")
+                    exclude(group: "org.webjars.npm", module: "d3-shape")
+                },
+                dependencies.create(libs.d3.dsv.get()) {
+                    exclude(group: "org.webjars.npm", module: "commander")
                 },
                 dependencies.create(libs.trumbowyg.get()) {
                     exclude(group: "org.webjars", module: "jquery")
@@ -4217,6 +4229,8 @@ ext.libraries = [
                 },
                 dependencies.create(libs.material.components.web.get()) {
                 },
+                dependencies.create(libs.dexie.get()) {
+                },
                 dependencies.create(libs.mdi.font.get()) {
                 },
                 dependencies.create(libs.normalize.css.get()) {
@@ -4231,6 +4245,9 @@ ext.libraries = [
                     exclude(group: "org.slf4j", module: "slf4j-api")
                 },
                 dependencies.create(libs.fingerprintjs.get()) {
+                },
+                dependencies.create(libs.jquery.ui.get()) {
+                    exclude(group: "org.webjars", module: "jquery")
                 }
         ]
 ]

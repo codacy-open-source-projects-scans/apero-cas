@@ -3,6 +3,7 @@ package org.apereo.cas.authentication.attribute;
 import module java.base;
 import org.apereo.cas.authentication.principal.attribute.PersonAttributeDao;
 import org.apereo.cas.authentication.principal.attribute.PersonAttributes;
+import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.RegexUtils;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -49,13 +50,15 @@ public abstract class BasePersonAttributeDao implements PersonAttributeDao {
     public void setId(final String... id) {
         this.id = id;
     }
-    
-    protected @Nullable PersonAttributes getSinglePerson(final Set<PersonAttributes> people) {
+
+    protected @Nullable PersonAttributes getSinglePerson(final @Nullable Set<PersonAttributes> people) {
         try {
             return DataAccessUtils.singleResult(people);
         } catch (final IncorrectResultSizeDataAccessException e) {
             LOGGER.warn("Unexpected multiple people returned from person attribute DAO: [{}] : [{}]", e.getClass().getName(), e.getMessage());
-            people.forEach(p -> LOGGER.debug("Person: [{}]", p));
+            if (people != null) {
+                people.forEach(p -> LOGGER.debug("Person: [{}]", p));
+            }
             throw e;
         }
     }
@@ -181,5 +184,13 @@ public abstract class BasePersonAttributeDao implements PersonAttributeDao {
 
         return RegexUtils.createPattern(queryBuilder.toString());
     }
-    
+
+    @Override
+    public Map<String, Object> toConfiguration() {
+        return CollectionUtils.wrap(
+            "order", this.order,
+            "enabled", this.enabled,
+            "id", this.id,
+            "tags", this.tags);
+    }
 }

@@ -68,15 +68,18 @@ public class DefaultTicketRegistryCleaner implements TicketRegistryCleaner {
     }
 
     protected int cleanInternal() {
-        try (val executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            val ticketsDeleted = ticketRegistry.stream()
+        try (val executor = Executors.newVirtualThreadPerTaskExecutor();
+             val ticketStream = ticketRegistry.stream()) {
+            val ticketsDeleted = ticketStream
                 .unordered()
                 .filter(Objects::nonNull)
                 .filter(Ticket::isExpired)
                 .map(ticket -> executor.submit(() -> cleanTicket(ticket)))
                 .mapToInt(Unchecked.toIntFunction(Future::get))
                 .sum();
-            LOGGER.info("[{}] expired tickets removed.", ticketsDeleted);
+            if (ticketsDeleted > 0) {
+                LOGGER.info("[{}] expired tickets removed.", ticketsDeleted);
+            }
             return ticketsDeleted;
         }
     }

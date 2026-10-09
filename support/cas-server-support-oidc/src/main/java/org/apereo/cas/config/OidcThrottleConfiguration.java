@@ -22,6 +22,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.ScopedProxyMode;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.web.util.UriUtils;
 
 /**
  * This is {@link OidcThrottleConfiguration}.
@@ -44,7 +45,7 @@ class OidcThrottleConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public WebMvcConfigurer oidcThrottleWebMvcConfigurer(
             @Qualifier(AuthenticationThrottlingExecutionPlan.BEAN_NAME)
-            final ObjectProvider<@NonNull AuthenticationThrottlingExecutionPlan> authenticationThrottlingExecutionPlan) {
+            final ObjectProvider<AuthenticationThrottlingExecutionPlan> authenticationThrottlingExecutionPlan) {
             return new WebMvcConfigurer() {
                 @Override
                 public void addInterceptors(@NonNull final InterceptorRegistry registry) {
@@ -91,8 +92,8 @@ class OidcThrottleConfiguration {
         public ThrottledRequestFilter oidcThrottledRequestFilter() {
             return (request, response) -> {
                 val webContext = new JEEContext(request, response);
-                val url = webContext.getRequestURL();
-                return THROTTLED_ENDPOINTS.stream().anyMatch(endpoint -> url.endsWith(endpoint));
+                val url = UriUtils.decode(webContext.getRequestURL(), StandardCharsets.UTF_8);
+                return THROTTLED_ENDPOINTS.stream().anyMatch(url::endsWith);
             };
         }
     }

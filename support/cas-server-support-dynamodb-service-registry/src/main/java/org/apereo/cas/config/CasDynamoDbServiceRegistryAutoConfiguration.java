@@ -11,7 +11,6 @@ import org.apereo.cas.services.ServiceRegistryExecutionPlanConfigurer;
 import org.apereo.cas.services.ServiceRegistryListener;
 import org.apereo.cas.util.spring.boot.ConditionalOnFeatureEnabled;
 import lombok.val;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -49,12 +48,15 @@ public class CasDynamoDbServiceRegistryAutoConfiguration {
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = "dynamoDbServiceRegistry")
     public ServiceRegistry dynamoDbServiceRegistry(
+        final CasConfigurationProperties casProperties,
         final ConfigurableApplicationContext applicationContext,
-        final ObjectProvider<@NonNull List<ServiceRegistryListener>> serviceRegistryListeners,
+        final ObjectProvider<List<ServiceRegistryListener>> serviceRegistryListeners,
         @Qualifier("dynamoDbServiceRegistryFacilitator")
         final DynamoDbServiceRegistryFacilitator dynamoDbServiceRegistryFacilitator) {
-        return new DynamoDbServiceRegistry(applicationContext, dynamoDbServiceRegistryFacilitator,
+        val registry = new DynamoDbServiceRegistry(applicationContext, dynamoDbServiceRegistryFacilitator,
             Optional.ofNullable(serviceRegistryListeners.getIfAvailable()).orElseGet(ArrayList::new));
+        registry.setOrder(casProperties.getServiceRegistry().getDynamoDb().getOrder());
+        return registry;
     }
 
     @Bean

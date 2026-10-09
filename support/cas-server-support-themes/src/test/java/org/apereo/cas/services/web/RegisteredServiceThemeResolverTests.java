@@ -64,7 +64,7 @@ class RegisteredServiceThemeResolverTests {
             val strategy = new DefaultRegisteredServiceAccessStrategy(false, true);
             registeredService.setAccessStrategy(strategy);
             servicesManager.save(registeredService);
-            val service = RegisteredServiceTestUtils.getService();
+            val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
             WebUtils.putServiceIntoFlowScope(context, service);
             assertEquals("example", themeResolver.resolveThemeName(context.getHttpServletRequest()));
         }
@@ -76,7 +76,7 @@ class RegisteredServiceThemeResolverTests {
             registeredService.setTheme(null);
             servicesManager.save(registeredService);
 
-            val service = RegisteredServiceTestUtils.getService();
+            val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
             WebUtils.putServiceIntoFlowScope(context, service);
             assertEquals("example", themeResolver.resolveThemeName(context.getHttpServletRequest()));
         }
@@ -111,6 +111,23 @@ class RegisteredServiceThemeResolverTests {
                     context.getHttpServletResponse(), "whatever"));
                 assertEquals("custom-theme", themeResolver.resolveThemeName(context.getHttpServletRequest()));
             }
+        }
+
+        @Test
+        void verifyThemeIsResolvedOncePerRequest() throws Throwable {
+            val context = MockRequestContext.create(applicationContext);
+            val registeredService = RegisteredServiceTestUtils.getRegisteredService(UUID.randomUUID().toString());
+            registeredService.setTheme("custom-theme");
+            servicesManager.save(registeredService);
+            val service = RegisteredServiceTestUtils.getService(registeredService.getServiceId());
+            WebUtils.putServiceIntoFlowScope(context, service);
+            val request = context.getHttpServletRequest();
+
+            assertEquals("custom-theme", themeResolver.resolveThemeName(request));
+            assertEquals("custom-theme", request.getAttribute("theme"));
+
+            servicesManager.delete(registeredService);
+            assertEquals("custom-theme", themeResolver.resolveThemeName(request));
         }
 
         @Test

@@ -4,9 +4,9 @@ import module java.base;
 import org.apereo.cas.util.PublisherIdentifier;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.SuperBuilder;
 import lombok.ToString;
 import lombok.With;
-import lombok.experimental.SuperBuilder;
 import lombok.extern.jackson.Jacksonized;
 
 /**
@@ -30,6 +30,10 @@ public class RedisMessagePayload<T extends Serializable> implements Serializable
     private final RedisMessageTypes messageType;
 
     private final T ticket;
+
+    private final String redisKey;
+
+    private final String cacheKey;
 
     public enum RedisMessageTypes {
         /**

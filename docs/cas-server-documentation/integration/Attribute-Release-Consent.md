@@ -16,7 +16,14 @@ indicate how should underlying changes in the attribute release policy be consid
 engine. Users are also provided the ability to set up reminders in the event 
 that no change is detected in the attribute release policy.
 
-Consent attribute records stored in the configured repository are signed and encrypted.
+Consent attribute records stored in the configured repository are signed and encrypted. Every CAS node must
+share the same keys. A record that can no longer be deciphered, because
+the keys were rotated or because a node does not have them, counts as a mismatch: the user is asked to consent
+again and the record is replaced with one that is encoded using the current keys.
+
+Consent decisions record their creation date in UTC, and reminders are calculated in UTC. This keeps a decision's
+age the same on every CAS node, whatever time zone each node runs in. Dates presented back to the user, such as
+those on the account profile screen, are shown in UTC as well.
 
 Support is enabled by including the following module in the WAR Overlay:
 
@@ -92,3 +99,16 @@ User consent decisions may be stored and remembered using one of the following o
 | Redis       | [See this guide](Attribute-Release-Consent-Storage-Redis.html).    |
 | REST        | [See this guide](Attribute-Release-Consent-Storage-REST.html).     |
 | Custom      | [See this guide](Attribute-Release-Consent-Storage-Custom.html).   |
+
+## Multitenancy
+
+Configuration settings for attribute consent storage can be specified in a multitenant environment. For example,
+one tenant may choose to store consent decisions in MongoDb, while another tenant may choose to use a SQL database.
+
+<div class="alert alert-info">:information_source: <strong>Remember</strong><p>
+Not every attribute consent storage service is multitenant-aware, and this capability is 
+limited to CAS features and modules that are explicitly designed to support 
+multitenancy. Please verify with the specific documentation for your storage service of choice. 
+</p></div>
+
+Please [review this guide](../multitenancy/Multitenancy-Overview.html) for more information on multitenancy.

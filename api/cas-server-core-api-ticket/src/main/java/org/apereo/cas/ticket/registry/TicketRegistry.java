@@ -183,6 +183,9 @@ public interface TicketRegistry {
 
     /**
      * Gets sessions for principal.
+     * <p>
+     * The returning stream may be bound to an IO channel (such as database connection),
+     * so it should be properly closed after usage.
      *
      * @param principalId the principal id
      * @return the sessions for
@@ -191,6 +194,19 @@ public interface TicketRegistry {
         return getTickets(ticket -> ticket instanceof final TicketGrantingTicket ticketGrantingTicket
             && !ticket.isExpired()
             && ticketGrantingTicket.getAuthentication().getPrincipal().getId().equals(principalId));
+    }
+
+    /**
+     * Gets sessions for an application.
+     * <p>
+     * The returning stream may be bound to an IO channel (such as database connection),
+     * so it should be properly closed after usage.
+     *
+     * @param service the service
+     * @return the sessions for
+     */
+    default Stream<? extends Ticket> getTicketsFor(final Service service) {
+        return Stream.empty();
     }
 
     /**
@@ -230,7 +246,9 @@ public interface TicketRegistry {
      * @return total count
      */
     default long countTicketsFor(final Service service) {
-        return 0;
+        try (var tickets = getTicketsFor(service)) {
+            return tickets.count();
+        }
     }
 
     /**
@@ -239,7 +257,9 @@ public interface TicketRegistry {
      * @return the total count.
      */
     default long countTickets() {
-        return stream().count();
+        try (var tickets = stream()) {
+            return tickets.count();
+        }
     }
 
     /**

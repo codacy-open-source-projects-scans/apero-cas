@@ -14,7 +14,6 @@ import org.apereo.cas.configuration.support.Beans;
 import org.apereo.cas.multitenancy.TenantExtractor;
 import org.apereo.cas.notifications.CommunicationsManager;
 import org.apereo.cas.services.ChainingServiceRegistry;
-import org.apereo.cas.services.ChainingServicesManager;
 import org.apereo.cas.services.DefaultChainingServiceRegistry;
 import org.apereo.cas.services.DefaultRegisteredServicePrincipalAccessStrategyEnforcer;
 import org.apereo.cas.services.DefaultRegisteredServicesEventListener;
@@ -51,7 +50,6 @@ import org.apereo.cas.services.resource.DefaultRegisteredServiceResourceNamingSt
 import org.apereo.cas.services.resource.RegisteredServiceResourceNamingStrategy;
 import org.apereo.cas.services.util.RegisteredServiceJsonSerializer;
 import org.apereo.cas.util.scripting.ExecutableCompiledScriptFactory;
-import org.apereo.cas.util.spring.CasApplicationReadyListener;
 import org.apereo.cas.util.spring.beans.BeanCondition;
 import org.apereo.cas.util.spring.beans.BeanSupplier;
 import org.apereo.cas.util.spring.boot.ConditionalOnFeatureEnabled;
@@ -63,7 +61,6 @@ import com.google.common.base.Predicates;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
@@ -216,7 +213,7 @@ class CasCoreServicesConfiguration {
         @Bean
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public ServiceRegistryExecutionPlan serviceRegistryExecutionPlan(
-            final ObjectProvider<@NonNull List<ServiceRegistryExecutionPlanConfigurer>> provider) {
+            final ObjectProvider<List<ServiceRegistryExecutionPlanConfigurer>> provider) {
             val plan = new DefaultServiceRegistryExecutionPlan();
             provider.ifAvailable(configurers -> configurers
                 .stream()
@@ -258,7 +255,7 @@ class CasCoreServicesConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public ChainingServiceRegistry serviceRegistry(
             final ConfigurableApplicationContext applicationContext,
-            final ObjectProvider<@NonNull List<ServiceRegistryListener>> serviceRegistryListeners,
+            final ObjectProvider<List<ServiceRegistryListener>> serviceRegistryListeners,
             @Qualifier("serviceRegistryExecutionPlan")
             final ServiceRegistryExecutionPlan serviceRegistryExecutionPlan) {
             val filter = (Predicate) Predicates.not(Predicates.instanceOf(ImmutableServiceRegistry.class));
@@ -299,7 +296,7 @@ class CasCoreServicesConfiguration {
             @Qualifier(WebApplicationService.BEAN_NAME_FACTORY)
             final ServiceFactory serviceFactory,
             @Qualifier("servicesManagerCache")
-            final Cache<@NonNull Long, RegisteredService> servicesManagerCache,
+            final Cache<Long, RegisteredService> servicesManagerCache,
             final List<ServicesManagerRegisteredServiceLocator> servicesManagerRegisteredServiceLocators,
             final Environment environment,
             final ConfigurableApplicationContext applicationContext) {
@@ -374,7 +371,7 @@ class CasCoreServicesConfiguration {
         @ConditionalOnMissingBean(name = ServicesManager.BEAN_NAME)
         @Bean
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
-        public ChainingServicesManager servicesManager(final List<ServicesManagerExecutionPlanConfigurer> configurers) {
+        public DefaultChainingServicesManager servicesManager(final List<ServicesManagerExecutionPlanConfigurer> configurers) {
             val chain = new DefaultChainingServicesManager();
             AnnotationAwareOrderComparator.sortIfNecessary(configurers);
             configurers.forEach(cfg -> chain.registerServiceManager(cfg.configureServicesManager()));
@@ -384,16 +381,8 @@ class CasCoreServicesConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         @Bean
         @ConditionalOnMissingBean(name = "servicesManagerCache")
-        public Cache<@NonNull Long, RegisteredService> servicesManagerCache(final CasConfigurationProperties casProperties) {
+        public Cache<Long, RegisteredService> servicesManagerCache(final CasConfigurationProperties casProperties) {
             return Beans.newCacheBuilder(casProperties.getServiceRegistry().getCache()).build();
-        }
-
-        @Bean
-        @Lazy(false)
-        public CasApplicationReadyListener servicesManagerApplicationReady(
-            @Qualifier(ServicesManager.BEAN_NAME) final ChainingServicesManager servicesManager,
-            final CasConfigurationProperties casProperties) {
-            return event -> servicesManager.load();
         }
     }
 
@@ -408,20 +397,20 @@ class CasCoreServicesConfiguration {
         public Runnable servicesManagerScheduledLoader(
             final ConfigurableApplicationContext applicationContext,
             @Qualifier("serviceRegistryExecutionPlan")
-            final ServiceRegistryExecutionPlan serviceRegistryExecutionPlan,
+            final ObjectProvider<ServiceRegistryExecutionPlan> serviceRegistryExecutionPlan,
             final CasConfigurationProperties casProperties,
             @Qualifier(ServicesManager.BEAN_NAME)
-            final ServicesManager servicesManager) {
+            final ObjectProvider<ServicesManager> servicesManager) {
 
             return BeanSupplier.of(Runnable.class)
                 .when(BeanCondition.on("cas.service-registry.schedule.enabled").isTrue().evenIfMissing()
                     .given(applicationContext.getEnvironment()))
                 .supply(() -> {
                     val filter = (Predicate) Predicates.not(Predicates.instanceOf(ImmutableServiceRegistry.class));
-                    if (!serviceRegistryExecutionPlan.find(filter).isEmpty()) {
+                    if (!serviceRegistryExecutionPlan.getObject().find(filter).isEmpty()) {
                         LOGGER.trace("Background task to load services is enabled to run every [{}]",
                             casProperties.getServiceRegistry().getSchedule().getRepeatInterval());
-                        return new ServicesManagerScheduledLoader(servicesManager);
+                        return new ServicesManagerScheduledLoader(servicesManager.getObject());
                     }
                     LOGGER.trace("Background task to load services is disabled");
                     return ServicesManagerScheduledLoader.noOp();

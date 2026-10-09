@@ -5,14 +5,21 @@ import org.apereo.cas.AbstractOAuth20Tests;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
+import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
+import org.apereo.cas.util.spring.DirectObjectProvider;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.pac4j.core.context.session.SessionStore;
 import org.pac4j.jee.context.JEEContext;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.web.servlet.HandlerInterceptor;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 
 /**
@@ -23,6 +30,42 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @Tag("OAuthWeb")
 class OAuth20HandlerInterceptorAdapterTests extends AbstractOAuth20Tests {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"%61uthorize", "%61ccessToken", "%74oken", "%72evoke", "%64evice"})
+    void verifyEncodedEndpointPathsRequireAuthentication(final String endpoint) throws Throwable {
+        val clientId = UUID.randomUUID().toString();
+        val service = getRegisteredService("https://oauth.example.org", clientId, CLIENT_SECRET);
+        servicesManager.save(service);
+
+        val request = new MockHttpServletRequest();
+        request.setRequestURI("/oauth2/" + endpoint);
+        request.setParameter(OAuth20Constants.CLIENT_ID, clientId);
+        request.setParameter(OAuth20Constants.REDIRECT_URI, "https://oauth.example.org");
+        request.setParameter(OAuth20Constants.RESPONSE_TYPE, OAuth20ResponseTypes.CODE.getType());
+        request.addHeader(HttpHeaders.USER_AGENT, "MSIE");
+        val response = new MockHttpServletResponse();
+        assertFalse(oauthHandlerInterceptorAdapter.preHandle(request, response, new Object()));
+    }
+
+    @Test
+    void verifySessionCookiePathIsConfiguredBeforeSecurityChecks() throws Throwable {
+        val configurationContext = mock(OAuth20ConfigurationContext.class);
+        val adapter = new OAuth20HandlerInterceptorAdapter(
+            new DirectObjectProvider<>(mock(HandlerInterceptor.class)),
+            new DirectObjectProvider<>(mock(HandlerInterceptor.class)),
+            new DirectObjectProvider<>(List.of()),
+            new DirectObjectProvider<>(servicesManager),
+            new DirectObjectProvider<>(mock(SessionStore.class)),
+            new DirectObjectProvider<>(List.of()),
+            new DirectObjectProvider<>(mock(OAuth20RequestParameterResolver.class)),
+            new DirectObjectProvider<>(configurationContext));
+        val request = new MockHttpServletRequest();
+        request.setContextPath("/cas");
+        request.setRequestURI("/cas" + OAuth20Constants.BASE_OAUTH20_URL + '/' + OAuth20Constants.AUTHORIZE_URL);
+        adapter.preHandle(request, new MockHttpServletResponse(), new Object());
+        verify(configurationContext).configureSessionReplicationCookiePath(request);
+    }
 
     @Test
     void verifyAuthorizationAuth() throws Throwable {

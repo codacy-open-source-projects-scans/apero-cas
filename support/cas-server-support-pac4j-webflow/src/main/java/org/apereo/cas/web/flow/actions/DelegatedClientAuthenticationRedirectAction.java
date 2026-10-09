@@ -3,6 +3,7 @@ package org.apereo.cas.web.flow.actions;
 import module java.base;
 import org.apereo.cas.audit.AuditableContext;
 import org.apereo.cas.authentication.principal.provision.DelegatedAuthenticationFailureException;
+import org.apereo.cas.pac4j.client.DelegatedIdentityProviders;
 import org.apereo.cas.services.RegisteredService;
 import org.apereo.cas.services.RegisteredServiceProperty.RegisteredServiceProperties;
 import org.apereo.cas.services.RegisteredServiceProperty.RegisteredServicePropertyGroups;
@@ -94,8 +95,8 @@ public class DelegatedClientAuthenticationRedirectAction extends BaseCasWebflowA
                 .stream()
                 .filter(BeanSupplier::isNotProxy)
                 .sorted(AnnotationAwareOrderComparator.INSTANCE)
-                .filter(Unchecked.predicate(contributor -> contributor.supports(client, webContext)))
-                .forEach(Unchecked.consumer(contributor -> contributor.customize(client, webContext))))
+                .filter(Unchecked.predicate(contributor -> contributor.supports(client, webContext, requestContext)))
+                .forEach(Unchecked.consumer(contributor -> contributor.customize(client, webContext, requestContext))))
             .map(client -> {
                 val callContext = new CallContext(webContext, configContext.getSessionStore());
                 return client.getRedirectionActionBuilder().getRedirectionAction(callContext);
@@ -133,8 +134,14 @@ public class DelegatedClientAuthenticationRedirectAction extends BaseCasWebflowA
         }
     }
 
+    /**
+     * Initializes the identity provider, waiting for an initialization already in flight.
+     *
+     * @param client the identity provider to initialize
+     * @throws Throwable if the provider cannot be initialized
+     */
     protected void initializeClientIdentityProvider(final IndirectClient client) throws Throwable {
-        client.init();
+        DelegatedIdentityProviders.initialize(client);
         FunctionUtils.throwIf(!client.isInitialized(), DelegatedAuthenticationFailureException::new);
     }
 

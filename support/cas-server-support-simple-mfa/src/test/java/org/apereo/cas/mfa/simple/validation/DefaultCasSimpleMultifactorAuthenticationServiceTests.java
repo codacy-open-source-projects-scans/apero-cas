@@ -1,14 +1,20 @@
 package org.apereo.cas.mfa.simple.validation;
 
 import module java.base;
+import org.apereo.cas.bucket4j.consumer.BucketConsumer;
 import org.apereo.cas.configuration.CasConfigurationProperties;
 import org.apereo.cas.mfa.simple.BaseCasSimpleMultifactorAuthenticationTests;
 import org.apereo.cas.mfa.simple.CasSimpleMultifactorTokenCredential;
+import org.apereo.cas.mfa.simple.ticket.CasSimpleMultifactorAuthenticationTicket;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.test.CasTestExtension;
 import org.apereo.cas.ticket.InvalidTicketException;
+import org.apereo.cas.ticket.Ticket;
+import org.apereo.cas.ticket.TicketFactory;
+import org.apereo.cas.ticket.registry.TicketRegistry;
 import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.LoggingUtils;
+import org.apereo.cas.util.spring.DirectObjectProvider;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.jooq.lambda.Unchecked;
@@ -24,6 +30,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.TestPropertySource;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 
 /**
@@ -77,6 +84,70 @@ class DefaultCasSimpleMultifactorAuthenticationServiceTests {
             val attributes = CollectionUtils.<String, Object>wrap("email", "casuser@example.org");
             assertDoesNotThrow(() -> multifactorAuthenticationService.update(RegisteredServiceTestUtils.getPrincipal(), attributes));
             assertTrue(attributes.containsKey("updated"));
+        }
+
+        @Test
+        void verifyStorePersistsGivenTokenAndNotRegistryCopy() throws Throwable {
+            val ticketRegistry = mock(TicketRegistry.class);
+            val token = mock(CasSimpleMultifactorAuthenticationTicket.class);
+            when(token.getId()).thenReturn(UUID.randomUUID().toString());
+            val registryCopy = mock(CasSimpleMultifactorAuthenticationTicket.class);
+            when(ticketRegistry.getTicket(anyString())).thenReturn(registryCopy);
+            val storedToken = mock(Ticket.class);
+            when(ticketRegistry.updateTicket(token)).thenReturn(storedToken);
+
+            val service = new DefaultCasSimpleMultifactorAuthenticationService(ticketRegistry,
+                mock(TicketFactory.class),
+                new DirectObjectProvider<>(mock(CasSimpleMultifactorAuthenticationAccountService.class)),
+                BucketConsumer.permitAll());
+            assertSame(storedToken, service.store(token));
+
+            verify(token).update();
+            verify(ticketRegistry).updateTicket(token);
+            verify(ticketRegistry, never()).updateTicket(registryCopy);
+            verify(ticketRegistry, never()).addTicket(any(Ticket.class));
+        }
+
+        @Test
+        void verifyStoreAddsTokenWhenAbsentFromRegistry() throws Throwable {
+            val ticketRegistry = mock(TicketRegistry.class);
+            val token = mock(CasSimpleMultifactorAuthenticationTicket.class);
+            when(token.getId()).thenReturn(UUID.randomUUID().toString());
+            when(ticketRegistry.getTicket(anyString())).thenReturn(null);
+            val storedToken = mock(Ticket.class);
+            when(ticketRegistry.addTicket(token)).thenReturn(storedToken);
+
+            val service = new DefaultCasSimpleMultifactorAuthenticationService(ticketRegistry,
+                mock(TicketFactory.class),
+                new DirectObjectProvider<>(mock(CasSimpleMultifactorAuthenticationAccountService.class)),
+                BucketConsumer.permitAll());
+            assertSame(storedToken, service.store(token));
+
+            verify(ticketRegistry).addTicket(token);
+            verify(ticketRegistry, never()).updateTicket(any(Ticket.class));
+        }
+
+        @Test
+        void verifyCodeIsCheckedAgainstTokenStoredUnderAnotherId() {
+            val ticketRegistry = mock(TicketRegistry.class);
+            val storedToken = mock(CasSimpleMultifactorAuthenticationTicket.class);
+            when(storedToken.getId()).thenReturn("CASMFA-stored");
+            when(storedToken.getProperties()).thenReturn(new HashMap<>(Map.of(CasSimpleMultifactorAuthenticationTicket.PROPERTY_CODE, "CASMFA-1234")));
+            when(ticketRegistry.getTicket("CASMFA-stored", CasSimpleMultifactorAuthenticationTicket.class)).thenReturn(storedToken);
+            when(ticketRegistry.getTicket("CASMFA-9999", CasSimpleMultifactorAuthenticationTicket.class)).thenThrow(new InvalidTicketException("CASMFA-9999"));
+
+            val service = new DefaultCasSimpleMultifactorAuthenticationService(ticketRegistry,
+                mock(TicketFactory.class),
+                new DirectObjectProvider<>(mock(CasSimpleMultifactorAuthenticationAccountService.class)),
+                BucketConsumer.permitAll());
+            val credential = new CasSimpleMultifactorTokenCredential("1234");
+            credential.setTicketId("CASMFA-stored");
+            assertSame(storedToken, service.getMultifactorAuthenticationTicket(credential));
+
+            val wrongCode = new CasSimpleMultifactorTokenCredential("9999");
+            wrongCode.setTicketId("CASMFA-stored");
+            assertThrows(InvalidTicketException.class, () -> service.getMultifactorAuthenticationTicket(wrongCode));
+            verify(ticketRegistry).getTicket("CASMFA-9999", CasSimpleMultifactorAuthenticationTicket.class);
         }
 
         @Test

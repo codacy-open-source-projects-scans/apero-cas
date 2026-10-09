@@ -3,12 +3,11 @@ package org.apereo.cas.web.saml2;
 import module java.base;
 import org.apereo.cas.support.pac4j.authentication.clients.DelegatedClientSessionManager;
 import org.apereo.cas.support.saml.SamlProtocolConstants;
-import org.apereo.cas.ticket.TransientSessionTicket;
+import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.web.flow.DelegatedClientAuthenticationConfigurationContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.jspecify.annotations.NonNull;
 import org.pac4j.core.client.Client;
 import org.pac4j.core.context.WebContext;
 import org.pac4j.saml.client.SAML2Client;
@@ -24,10 +23,10 @@ import org.springframework.beans.factory.ObjectProvider;
 @RequiredArgsConstructor
 @Slf4j
 public class DelegatedClientSaml2SessionManager implements DelegatedClientSessionManager {
-    private final ObjectProvider<@NonNull DelegatedClientAuthenticationConfigurationContext> contextProvider;
+    private final ObjectProvider<DelegatedClientAuthenticationConfigurationContext> contextProvider;
 
     @Override
-    public void trackIdentifier(final WebContext webContext, final TransientSessionTicket ticket, final Client client) {
+    public void trackIdentifier(final WebContext webContext, final Ticket ticket, final Client client) {
         contextProvider.getObject().getSessionStore().set(webContext,
             SAML2StateGenerator.SAML_RELAY_STATE_ATTRIBUTE, ticket.getId());
     }

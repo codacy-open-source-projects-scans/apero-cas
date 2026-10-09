@@ -6,14 +6,13 @@ import org.apereo.cas.config.CasCoreScriptingAutoConfiguration;
 import org.apereo.cas.config.CasCoreUtilAutoConfiguration;
 import org.apereo.cas.configuration.CasConfigurationProperties;
 import org.apereo.cas.test.CasTestExtension;
+import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.RandomUtils;
 import org.apereo.cas.util.spring.boot.SpringBootTestAutoConfigurations;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.parallel.ResourceAccessMode;
-import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -28,7 +27,6 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @Tag("Authentication")
 @ExtendWith(CasTestExtension.class)
-@ResourceLock(value = "attributeDefinitionStore", mode = ResourceAccessMode.READ_WRITE)
 @SpringBootTestAutoConfigurations
 @SpringBootTest(classes = {
     CasCoreUtilAutoConfiguration.class,
@@ -140,7 +138,7 @@ class DefaultAttributeDefinitionTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"MD5", "SHA1", "SHA256", "SHA512", "BASE64", "UNKNOWN"})
+    @ValueSource(strings = {"MD5", "SHA1", "SHA", "HEX", "SHA256", "SHA512", "BASE64", "UNKNOWN"})
     void verifyHashingFunction(final String hashingStrategy) throws Throwable {
         val defn = DefaultAttributeDefinition.builder()
             .key("givenName")
@@ -149,5 +147,19 @@ class DefaultAttributeDefinitionTests {
         val context = getAttributeDefinitionResolutionContext();
         val values = defn.resolveAttributeValues(context);
         assertFalse(values.isEmpty());
+    }
+
+    @Test
+    void verifyBinaryAttribute() throws Throwable {
+        val defn = DefaultAttributeDefinition.builder()
+            .key("givenName")
+            .script("groovy { return ['hello world'.getBytes()] }")
+            .hashingStrategy("base64")
+            .build();
+        val context = getAttributeDefinitionResolutionContext();
+        val values = defn.resolveAttributeValues(context);
+        assertFalse(values.isEmpty());
+        val result = EncodingUtils.decodeBase64ToString(values.getFirst().toString());
+        assertEquals("hello world", result);
     }
 }

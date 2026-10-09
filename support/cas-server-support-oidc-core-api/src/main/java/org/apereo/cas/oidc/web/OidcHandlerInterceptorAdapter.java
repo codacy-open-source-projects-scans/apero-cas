@@ -7,6 +7,7 @@ import org.apereo.cas.services.ServicesManager;
 import org.apereo.cas.support.oauth.validator.authorization.OAuth20AuthorizationRequestValidator;
 import org.apereo.cas.support.oauth.web.OAuth20HandlerInterceptorAdapter;
 import org.apereo.cas.support.oauth.web.OAuth20RequestParameterResolver;
+import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
 import org.apereo.cas.support.oauth.web.response.accesstoken.ext.AccessTokenGrantRequestExtractor;
 import org.apereo.cas.util.CollectionUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import lombok.val;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hc.core5.http.HttpStatus;
 import org.pac4j.core.context.session.SessionStore;
+import org.pac4j.jee.context.JEEContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
@@ -44,10 +46,11 @@ public class OidcHandlerInterceptorAdapter extends OAuth20HandlerInterceptorAdap
         final ObjectProvider<ServicesManager> servicesManager,
         final ObjectProvider<SessionStore> sessionStore,
         final ObjectProvider<List<OAuth20AuthorizationRequestValidator>> oauthAuthorizationRequestValidators,
-        final ObjectProvider<OAuth20RequestParameterResolver> oauthRequestParameterResolver) {
+        final ObjectProvider<OAuth20RequestParameterResolver> oauthRequestParameterResolver,
+        final ObjectProvider<OAuth20ConfigurationContext> configurationContext) {
         super(requiresAuthenticationAccessTokenInterceptor, requiresAuthenticationAuthorizeInterceptor,
             accessTokenGrantRequestExtractors, servicesManager, sessionStore, oauthAuthorizationRequestValidators,
-            oauthRequestParameterResolver);
+            oauthRequestParameterResolver, configurationContext);
 
         this.requiresAuthenticationDynamicRegistrationInterceptor = requiresAuthenticationDynamicRegistrationInterceptor;
         this.casProperties = casProperties;
@@ -75,8 +78,17 @@ public class OidcHandlerInterceptorAdapter extends OAuth20HandlerInterceptorAdap
             response.setStatus(HttpStatus.SC_NOT_IMPLEMENTED);
             return false;
         }
-        
-        if (isVerifiableCredentialTransactionRequest(request.getRequestURI()) || isPushedAuthorizationRequest(request.getRequestURI())) {
+
+        if (isPushedAuthorizationRequest(request.getRequestURI()) && !isValidAuthorizeRequest(new JEEContext(request, response))) {
+            LOGGER.warn("Invalid OIDC pushed authorization request at [{}]", request.getRequestURI());
+            response.setStatus(HttpStatus.SC_FORBIDDEN);
+            writeErrorResponseBody(response);
+            return false;
+        }
+
+        if (isVerifiableCredentialTransactionRequest(request.getRequestURI())
+            || isVerifiableCredentialPresentationRequest(request.getRequestURI())
+            || isPushedAuthorizationRequest(request.getRequestURI())) {
             LOGGER.trace("OIDC request is protected at [{}]", request.getRequestURI());
             return requiresAuthenticationAccessTokenInterceptor.getObject().preHandle(request, response, handler);
         }
@@ -142,6 +154,19 @@ public class OidcHandlerInterceptorAdapter extends OAuth20HandlerInterceptorAdap
 
     protected boolean isVerifiableCredentialTransactionRequest(final String requestPath) {
         return doesUriMatchPattern(requestPath, CollectionUtils.wrapList(OidcConstants.VC_CREDENTIAL_OFFER_TRANSACTIONS_URL));
+    }
+
+    /**
+     * Is this a request to create a verifiable credential presentation request, or to collect its
+     * result? Both belong to the relying party. Wallet lookups that carry a request identifier in the
+     * path remain publicly accessible, which is why the result is addressed by query parameter.
+     *
+     * @param requestPath the request path
+     * @return true/false
+     */
+    protected boolean isVerifiableCredentialPresentationRequest(final String requestPath) {
+        return doesUriMatchPattern(requestPath, CollectionUtils.wrapList(
+            OidcConstants.VC_PRESENTATION_REQUEST_URL, OidcConstants.VC_PRESENTATION_RESULT_URL));
     }
 
     @Override

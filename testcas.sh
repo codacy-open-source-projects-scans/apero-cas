@@ -5,16 +5,19 @@ GREEN="\e[32m"
 CYAN="\e[36m"
 ENDCOLOR="\e[0m"
 
+CHANGED_CATEGORIES=()
+
 #clear
 find ./ci/tests -type f -name "*.sh" -exec chmod +x {} \;
 
 dockerPlatform="unknown"
+printf "\n👷 Checking Docker engine platform..."
 docker ps &> /dev/null
 if [[ $? -ne 0 ]] ; then
   printf "\n🔥 ${RED}Docker engine is not available.${ENDCOLOR}\n"
 else
   dockerPlatform=$(docker version --format '{{json .Server.Os}}')
-  printf "\nDocker engine platform is ${GREEN}%s${ENDCOLOR}\n" "$dockerPlatform."
+  printf "\n👷 Docker engine platform is ${GREEN}%s${ENDCOLOR}\n" "$dockerPlatform."
 fi
 
 function isDockerOnLinux() {
@@ -33,11 +36,33 @@ function isDockerOnWindows() {
   return 1
 }
 
-printHelp() {
-    printf "\nUsage: ${CYAN}./testcas.sh${ENDCOLOR} --category [category1,category2,...] [--help] [--test TestClass]\n\t[--ignore-failures] [--no-watch] [--no-wrapper] [--no-retry] [--debug] [--no-parallel]\n\t[--dry-run][--info] [--with-coverage] [--no-build-cache] \n"
-    printf "\nTo see what test categories are available, use:\n"
+function printHelp() {
+    printf "\n👷 Usage: ${CYAN}./testcas.sh${ENDCOLOR}\n\t--category [category1,category2,...]\n\t[--help]\n\t[--test TestClass]\n\t[--ignore-failures]\n\t[--no-watch]\n\t[--no-wrapper]\n\t[--no-retry]\n\t[--debug]\n\t[--no-parallel]\n\t[--dry-run][--info]\n\t[--with-coverage]\n\t[--no-build-cache] \n"
+    printf "\n👷 To see what test categories are available, use:\n"
     printf "\t${GREEN}./gradlew -q testCategories${ENDCOLOR}\n"
-    echo -e "\nPlease see the test script for details."
+    printf "\n👷 You can pass '${GREEN}changed${ENDCOLOR}' for the category to only run affected tests based on the current changeset.\n"
+    echo -e "👷 Please see the test script for details."
+}
+
+
+function collectChangedCategories() {
+  while IFS= read -r tag; do
+    CHANGED_CATEGORIES+=("$tag")
+  done < <(
+    {
+      git diff --name-only --diff-filter=ACMR HEAD --
+      git ls-files --others --exclude-standard
+    } |
+      sort -u |
+      while IFS= read -r file; do
+        [[ -f "$file" ]] || continue
+
+        grep -hoE '@Tag[[:space:]]*\([[:space:]]*"[^"]+"' "$file" || true
+      done |
+      sed -E 's/.*"([^"]+)".*/\1/' |
+      tr '[:upper:]' '[:lower:]' |
+      sort -u
+  )
 }
 
 task=""
@@ -45,17 +70,12 @@ parallel="--parallel "
 dryRun=""
 info=""
 gradleCmd="./gradlew"
-flags="--no-daemon --configure-on-demand --build-cache -x javadoc -x check -Dverbose=true --no-watch-fs"
-coverageTask=""
+flags="--configure-on-demand --build-cache -x javadoc -x check --quiet -DskipNestedConfigMetadataGen=true "
 
 while (( "$#" )); do
     case "$1" in
     --max-workers)
         parallel="${parallel} --max-workers=8"
-        shift
-        ;;
-    --no-cache)
-        parallel="--no-configuration-cache "
         shift
         ;;
     --no-parallel)
@@ -72,15 +92,7 @@ while (( "$#" )); do
         shift
         ;;
     --with-coverage)
-        currentDir=`pwd`
-        case "${currentDir}" in
-            *api*|*core*|*support*|*webapp*)
-                coverageTask="jacocoTestReport --stacktrace"
-                ;;
-            *)
-                coverageTask="jacocoRootReport --stacktrace"
-                ;;
-        esac
+        flags+=" -DenableJacocoAgent=true "
         shift
         ;;
     --info)
@@ -138,10 +150,26 @@ while (( "$#" )); do
         ;;
     --category)
         category="$2"
+
+        if [[ "$category" == "changed" ]]; then
+          collectChangedCategories
+          category=""
+          for tag in "${CHANGED_CATEGORIES[@]}"; do
+             category+="${tag} "
+          done
+          formatted=$(printf '%s\n' "$category" | awk '{ for (i = 1; i <= NF; i++) print "  - " $i }')
+          if [[ -z "$category" ]]; then
+            printf "👷 ${RED}No test categories were detected for the current changeset. Have you modified tests?${ENDCOLOR}\n\n"
+            exit 0
+          else
+            printf "👷 ${GREEN}Test categories for current changeset are:\n${formatted} ${ENDCOLOR}\n\n"
+          fi
+        fi
+
         for item in $(echo "$category" | sed "s/,/ /g")
         do
             categoryItem=$(echo "${item}" | awk '{print tolower($0)}')
-            
+
             case "${categoryItem}" in
             test|simple|run|basic|unit|unittests)
                 task+="testSimple "
@@ -279,6 +307,7 @@ while (( "$#" )); do
             config|casconfig|ccfg|cfg|cas-config|casconfiguration)
                 isDockerOnLinux && ./ci/tests/etcd/run-etcd-server.sh || exit 1
                 task+="testCasConfiguration "
+                flags="${flags/-DskipNestedConfigMetadataGen=true}"
                 ;;
             geolocation|geo)
                 task+="testGeoLocation "
@@ -382,9 +411,11 @@ while (( "$#" )); do
                 task+="testJMX "
                 ;;
             restfulapiauthentication|restfulauthn|restauthn)
+                isDockerOnLinux && ./ci/tests/httpbin/run-httpbin-server.sh || exit 1
                 task+="testRestfulApiAuthentication "
                 ;;
             rest|restful|restapi|restfulapi)
+                isDockerOnLinux && ./ci/tests/httpbin/run-httpbin-server.sh || exit 1
                 task+="testRestfulApi "
                 ;;
             webflow-mfa-actions|swf-mfa_actions|webflowmfaactions)
@@ -451,7 +482,7 @@ while (( "$#" )); do
                 isDockerOnLinux && ./ci/tests/ldap/run-ldap-server.sh || exit 1
                 task+="testLdapRepository "
                 ;;
-            ldapauthentication|ldapauthn)
+            ldapauthentication|ldapauthn|ldapauth)
                 isDockerOnLinux && ./ci/tests/ldap/run-ldap-server.sh || exit 1
                 task+="testLdapAuthentication "
                 ;;
@@ -463,12 +494,14 @@ while (( "$#" )); do
                 isDockerOnLinux && ./ci/tests/ldap/run-ldap-server.sh || exit 1
                 task+="testLdap "
                 ;;
-            mongodbmfa)
+            mongodbmfa|mongomfa)
                 isDockerOnLinux && ./ci/tests/mongodb/run-mongodb-server.sh || exit 1
+                isDockerOnLinux && ./ci/tests/mongodb/run-mongodb-server-clustered.sh || exit 1
                 task+="testMongoDbMFA "
                 ;;
             mongo|mongodb)
                 isDockerOnLinux && ./ci/tests/mongodb/run-mongodb-server.sh || exit 1
+                isDockerOnLinux && ./ci/tests/mongodb/run-mongodb-server-clustered.sh || exit 1
                 task+="testMongoDb "
                 ;;
             mysql)
@@ -479,7 +512,7 @@ while (( "$#" )); do
                 isDockerOnLinux && ./ci/tests/mariadb/run-mariadb-server.sh || exit 1
                 task+="testMariaDb "
                 ;;
-            postgres|pg|postgresql)
+            postgres|pg|postgresql|psql)
                 isDockerOnLinux && ./ci/tests/postgres/run-postgres-server.sh || exit 1
                 task+="testPostgres "
                 ;;
@@ -521,10 +554,12 @@ while (( "$#" )); do
                 ;;
             redis)
                 isDockerOnLinux && ./ci/tests/redis/run-redis-server.sh || exit 1
+                isDockerOnLinux && ./ci/tests/redis/run-redis-server.sh --clustered || exit 1
                 task+="testRedis "
                 ;;
             activemq|amq|jms|rabbitmq|artemis|amqp)
                 isDockerOnLinux && ./ci/tests/rabbitmq/run-rabbitmq-server.sh || exit 1
+                isDockerOnLinux && ./ci/tests/rabbitmq/run-rabbitmq-server-clustered.sh || exit 1
                 task+="testAMQP "
                 ;;
             *)
@@ -534,6 +569,7 @@ while (( "$#" )); do
                 ;;
             esac
         done
+
         shift 2
         ;;
     *)
@@ -544,30 +580,25 @@ while (( "$#" )); do
     esac
 done
 
-if [[ -n "$coverageTask" ]]; then
-  task=""
-  printf "${GREEN}Running code coverage task [${coverageTask}] will disable all other task executions. Make sure all test tasks that generate code coverage data have already executed.${ENDCOLOR}\n"
-fi
-
-if [[ -z "$task" ]] && [[ -z "$coverageTask" ]]; then
+if [[ -z "$task" ]]; then
   printHelp
   exit 1
 fi
 
-cmd="$gradleCmd ${GREEN}$task $tests${ENDCOLOR}${flags}${debug}${dryRun}${info}${parallel}${GREEN}$coverageTask${ENDCOLOR}"
-printf "${cmd} \n"
+cmd="$gradleCmd ${GREEN}$task $tests${ENDCOLOR}${flags}${debug}${dryRun}${info}${parallel}"
+printf "👷 ${cmd} \n"
 echo
-cmd="$gradleCmd $task $tests $flags ${debug} ${parallel} ${dryRun} ${info} ${coverageTask}"
+cmd="$gradleCmd $task $tests $flags ${debug} ${parallel} ${dryRun} ${info}"
 eval "$cmd"
 retVal=$?
 echo -e "***************************************************************************************"
-printf "${CYAN}Gradle build finished at $(date) with exit code $retVal ${ENDCOLOR}\n"
+printf "👷 ${CYAN}Gradle build finished at $(date) with exit code $retVal ${ENDCOLOR}\n"
 echo -e "***************************************************************************************"
 
 if [ $retVal == 0 ]; then
-    printf "${GREEN}Gradle build finished successfully.${ENDCOLOR}\n"
+    printf "👷 ${GREEN}Gradle build finished successfully.${ENDCOLOR}\n"
     exit 0
 else
-    printf "${RED}Gradle build did NOT finish successfully.${ENDCOLOR}\n"
+    printf "🔥 ${RED}Gradle build did NOT finish successfully.${ENDCOLOR}\n"
     exit $retVal
 fi

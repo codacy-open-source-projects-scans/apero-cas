@@ -64,7 +64,6 @@ import org.apereo.cas.web.flow.SingleSignOnParticipationStrategy;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfigureOrder;
@@ -75,7 +74,6 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.ScopedProxyMode;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
@@ -156,7 +154,7 @@ class CasCoreTicketsConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public AuthenticationPolicy uniqueAuthenticationPolicy(
             @Qualifier(SingleSignOnParticipationStrategy.BEAN_NAME)
-            final ObjectProvider<@NonNull SingleSignOnParticipationStrategy> singleSignOnParticipationStrategy,
+            final ObjectProvider<SingleSignOnParticipationStrategy> singleSignOnParticipationStrategy,
             @Qualifier(TicketRegistry.BEAN_NAME)
             final TicketRegistry ticketRegistry,
             final CasConfigurationProperties casProperties) {
@@ -226,7 +224,6 @@ class CasCoreTicketsConfiguration {
         @Bean
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         @ConditionalOnMissingBean(name = "messageQueueTicketRegistryReceiver")
-        @Lazy(false)
         public QueueableTicketRegistryMessageReceiver messageQueueTicketRegistryReceiver(
             final ConfigurableApplicationContext applicationContext,
             @Qualifier(TicketRegistry.BEAN_NAME)
@@ -249,6 +246,8 @@ class CasCoreTicketsConfiguration {
         }
 
         /**
+         * Builds the protocol ticket cipher executor.
+         *
          * @deprecated since 7.1.0.
          */
         @Deprecated(since = "7.1.0")

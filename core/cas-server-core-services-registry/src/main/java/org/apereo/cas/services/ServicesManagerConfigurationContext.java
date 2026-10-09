@@ -8,7 +8,7 @@ import org.apereo.cas.multitenancy.TenantExtractor;
 import com.github.benmanes.caffeine.cache.Cache;
 import lombok.Builder;
 import lombok.Getter;
-import lombok.experimental.SuperBuilder;
+import lombok.SuperBuilder;
 import org.jspecify.annotations.NonNull;
 import org.springframework.context.ConfigurableApplicationContext;
 
@@ -37,7 +37,7 @@ public class ServicesManagerConfigurationContext {
     private final Set<String> environments = new HashSet<>();
 
     @NonNull
-    private final Cache<@NonNull Long, RegisteredService> servicesCache;
+    private final Cache<Long, RegisteredService> servicesCache;
 
     @Builder.Default
     private final List<ServicesManagerRegisteredServiceLocator> registeredServiceLocators = new ArrayList<>();

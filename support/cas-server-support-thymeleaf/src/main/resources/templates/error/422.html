@@ -17,8 +17,8 @@
             <h2 th:utext="#{screen.error.page.title.unprocessable}">Unprocessable or Stale Request</h2>
             <p th:utext="#{screen.error.page.unprocessable}">This request cannot be processed.</p>
             <p>
-                <button type="button" class="mdc-button mdc-button--raised btn btn-primary"
-                        onclick="clearSessionStorage(); clearLocalStorage(); location.href=location.href;">
+                <button type="button" class="mdc-button mdc-button--raised btn btn-primary drop-button"
+                        onclick="clearSessionStorage(); clearLocalStorage(); clearCookieStorage(); location.href=location.href;">
                     <span class="mdc-button__label">Clear</span>
                 </button>
             </p>

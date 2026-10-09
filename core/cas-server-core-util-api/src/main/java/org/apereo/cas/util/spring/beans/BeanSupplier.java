@@ -9,6 +9,7 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.jooq.lambda.Unchecked;
 import org.jooq.lambda.fi.util.function.CheckedSupplier;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import java.lang.reflect.Proxy;
 
 /**
@@ -36,18 +37,19 @@ public interface BeanSupplier<T> extends Supplier<T> {
     }
 
     /**
-     * Is proxy class?
+     * Determines whether the result is a proxy class.
      *
      * @param result the result
      * @return true/false
      */
     static boolean isProxy(final Object result) {
-        return result != null && Proxy.isProxyClass(result.getClass())
-               && result.toString().startsWith(PROXY_BEAN_TOSTRING_PREFIX);
+        return result != null
+            && Proxy.isProxyClass(result.getClass())
+            && Proxy.getInvocationHandler(result) instanceof ProxiedBeanSupplier.ProxyBeanInvocationHandler;
     }
 
     /**
-     * Is not proxy class?
+     * Determines whether the result is not a proxy class.
      *
      * @param result the result
      * @return true/false
@@ -160,7 +162,7 @@ public interface BeanSupplier<T> extends Supplier<T> {
     /**
      * Otherwise proxy bean supplier.
      *
-     * @param beforeCallback the callback to execute before proxy is created
+     * @param beforeCallback the callback to execute before proxy is selected
      * @return the bean supplier
      */
     BeanSupplier<T> otherwiseProxy(Consumer<T> beforeCallback);
@@ -185,10 +187,19 @@ public interface BeanSupplier<T> extends Supplier<T> {
 
         @Override
         public T get() {
-            if (!conditionSuppliers.isEmpty() && conditionSuppliers.stream().allMatch(Supplier::get)) {
+            if (!conditionSuppliers.isEmpty() && conditionSuppliersMatch()) {
                 return beanSupplier.get();
             }
             return otherwiseSupplier.get();
+        }
+
+        private boolean conditionSuppliersMatch() {
+            for (val conditionSupplier : conditionSuppliers) {
+                if (!conditionSupplier.get()) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         @Override
@@ -221,10 +232,7 @@ public interface BeanSupplier<T> extends Supplier<T> {
         @Override
         @CanIgnoreReturnValue
         public BeanSupplier<T> otherwiseProxy(final Consumer<T> beforeCallback) {
-            if (beforeCallback != null) {
-                beforeCallback.accept(null);
-            }
-            return otherwise(new ProxiedBeanSupplier<>(this.clazz));
+            return otherwise(new ProxiedBeanSupplier<>(this.clazz, beforeCallback));
         }
 
         @Override
@@ -236,16 +244,16 @@ public interface BeanSupplier<T> extends Supplier<T> {
 
     class NullBeanSupplier<T> implements Supplier<T> {
         @Override
-        public T get() {
+        public @Nullable T get() {
             return null;
         }
     }
 
     @RequiredArgsConstructor
     class ProxiedBeanSupplier<T> implements Supplier<T> {
-        private static final Map<Class, Object> TYPES_AND_VALUES;
+        private static final Map<Class<?>, Object> TYPES_AND_VALUES;
 
-        private static final Map<String, Object> PROXIES = new ConcurrentHashMap<>();
+        private static final Map<Class<?>, Object> PROXIES = new ConcurrentHashMap<>();
 
         static {
             TYPES_AND_VALUES = new HashMap<>();
@@ -286,21 +294,37 @@ public interface BeanSupplier<T> extends Supplier<T> {
 
         private final Class<T> clazz;
 
+        private final Consumer<T> beforeCallback;
+
         @Override
         public T get() {
             if (!clazz.isInterface()) {
                 throw new IllegalArgumentException("Cannot create bean supplier proxy for non-interface type " + clazz.getSimpleName());
             }
-            return (T) PROXIES.computeIfAbsent(clazz.getName(),
-                s -> Proxy.newProxyInstance(getClass().getClassLoader(),
-                    new Class[]{clazz},
-                    (proxy, method, args) -> {
-                        if ("toString".equals(method.getName())) {
-                            return PROXY_BEAN_TOSTRING_PREFIX + clazz.getName();
-                        }
-                        val returnType = method.getReturnType();
-                        return TYPES_AND_VALUES.getOrDefault(returnType, null);
-                    }));
+            if (beforeCallback != null) {
+                beforeCallback.accept(null);
+            }
+            return (T) PROXIES.computeIfAbsent(clazz, ProxiedBeanSupplier::newProxyInstance);
+        }
+
+        private static Object newProxyInstance(final Class<?> clazz) {
+            return Proxy.newProxyInstance(clazz.getClassLoader(),
+                new Class[]{clazz},
+                new ProxyBeanInvocationHandler(clazz));
+        }
+
+        @RequiredArgsConstructor
+        static final class ProxyBeanInvocationHandler implements InvocationHandler {
+            private final Class<?> clazz;
+
+            @Override
+            public Object invoke(final Object proxy, final Method method, final Object[] args) {
+                if ("toString".equals(method.getName())) {
+                    return PROXY_BEAN_TOSTRING_PREFIX + clazz.getName();
+                }
+                val returnType = method.getReturnType();
+                return TYPES_AND_VALUES.getOrDefault(returnType, null);
+            }
         }
     }
 

@@ -33,6 +33,7 @@ async function createPublicKey() {
         "aud": "https://localhost:8443/cas/oidc"
     }, privateKey, "RS256", {
         header: {
+            typ: "openid4vci-proof+jwt",
             jwk: publicJwk
         }
     });
@@ -54,7 +55,7 @@ async function createPublicKey() {
             "Content-Type": "application/json"
         }, (res) => {
             assert(res.data.c_nonce !== undefined);
-            assert(res.data.c_nonce_expires_at !== undefined);
+            assert(res.data.c_nonce_expires_in === undefined, "OpenID4VCI 1.0 nonce responses carry only c_nonce");
             return res.data.c_nonce;
         }, (error) => {
             throw `Operation failed: ${error}`;
@@ -74,6 +75,9 @@ async function createPublicKey() {
     );
     assert(payload.transactionId !== undefined);
     assert(payload.credentialOfferUri !== undefined);
+    assert(payload.txCode !== undefined);
+    assert(payload.txCode !== payload.transactionId,
+        "The transaction code must never be the transaction identifier");
 
     await cas.log(`Fetched credential offer URI ${payload.credentialOfferUri}`);
     await cas.log("Now fetching credential offer...");
@@ -84,11 +88,13 @@ async function createPublicKey() {
             assert(res.data.credential_issuer === "https://localhost:8443/cas/oidc");
             assert(res.data.credential_configuration_ids[0] === "myorg");
             assert(res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["pre-authorized_code"] !== undefined);
-            assert(res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["tx_code_required"] === true);
-            assert(res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["tx_code"] !== undefined);
+            const txCode = res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["tx_code"];
+            assert(txCode !== undefined);
+            assert(txCode.value === undefined, "The credential offer must never disclose the transaction code");
+            assert(txCode.length === payload.txCode.length);
+            assert(txCode.input_mode !== undefined);
             assert(res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["issuer_state"] !== undefined);
             return {
-                txCode: res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["tx_code"],
                 preAuthorizedCode: res.data.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["pre-authorized_code"]
             };
         }, (error) => {
@@ -97,9 +103,26 @@ async function createPublicKey() {
 
     await cas.log("Now fetching access token for pre-authorized code...");
     
-    let params = "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&&scope=openid";
-    params += `&pre-authorized_code=${offer.preAuthorizedCode}&tx_code=${offer.txCode}`;
-    let url = `https://localhost:8443/cas/oidc/token?${params}`;
+    const baseParams = "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&&scope=openid"
+        + `&pre-authorized_code=${offer.preAuthorizedCode}`;
+
+    await cas.log("Verifying the transaction identifier is rejected as a transaction code...");
+    const rejected = await cas.doRequest(
+        `https://localhost:8443/cas/oidc/token?${baseParams}&tx_code=${payload.transactionId}`, "POST", {
+            "Content-Type": "application/json",
+            "Authorization": `Basic ${btoa("client:secret")}`
+        }, 0, "");
+    assert(!rejected.includes("access_token"),
+        "The transaction identifier must not be accepted as the transaction code");
+
+    await cas.log("Verifying a missing transaction code is rejected...");
+    const missing = await cas.doRequest(`https://localhost:8443/cas/oidc/token?${baseParams}`, "POST", {
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${btoa("client:secret")}`
+    }, 0, "");
+    assert(!missing.includes("access_token"), "A missing transaction code must not be accepted");
+
+    let url = `https://localhost:8443/cas/oidc/token?${baseParams}&tx_code=${payload.txCode}`;
     await cas.log(`Calling ${url}`);
 
     const accessToken = await cas.doPost(url, "", {
@@ -107,8 +130,7 @@ async function createPublicKey() {
         "Authorization": `Basic ${btoa("client:secret")}`
     }, (res) => {
         assert(res.data.access_token !== undefined);
-        assert(res.data.c_nonce !== undefined);
-        assert(res.data.c_nonce_expires_at !== undefined);
+        assert(res.data.c_nonce === undefined, "OpenID4VCI 1.0 moved the proof challenge to the nonce endpoint");
         return res.data.access_token;
     }, (error) => {
         throw `Operation failed: ${error}`;
@@ -121,9 +143,8 @@ async function createPublicKey() {
     const proof = await createPublicKey();
     const credentialRequest = JSON.stringify({
         credential_configuration_id: "myorg",
-        proof: {
-            proof_type: "jwt",
-            jwt: proof
+        proofs: {
+            jwt: [proof]
         }
     });
     const result = JSON.parse(await cas.doRequest(url, "POST", {
@@ -131,11 +152,15 @@ async function createPublicKey() {
         "Authorization": `Bearer ${accessToken}`
     }, 200, credentialRequest));
     await cas.log(result);
-    assert(result.credential !== undefined);
-    assert(result.format === "vc+sd-jwt");
+    assert(result.credentials.length === 1);
+    assert(result.credential === undefined, "OpenID4VCI 1.0 replaced credential with the credentials array");
+    assert(result.format === undefined, "OpenID4VCI 1.0 carries no format in the credential response");
 
-    const decoded = await cas.decodeJwt(result.credential);
-    assert(decoded.sub === "client");
+    const parts = result.credentials[0].credential.split("~");
+    const issuerJwt = parts[0];
+    const decoded = await cas.decodeJwt(issuerJwt);
+    assert(decoded !== undefined && decoded !== null);
+    assert(decoded.sub === "casuser");
     assert(decoded.email === "casuser@example.org");
     assert(decoded.given_name === "CAS");
     assert(decoded.family_name === "User");
@@ -143,5 +168,8 @@ async function createPublicKey() {
     assert(decoded.roles.length === 2);
     assert(decoded.roles.includes("user"));
     assert(decoded.roles.includes("admin"));
-    assert(decoded.student_id === "S12345");
+    assert(decoded.student_id === undefined);
+
+    await cas.log(`Credential issued at ${decoded.iat} and expires at ${decoded.exp}`);
+    assert(decoded.exp - decoded.iat === 30 * 24 * 60 * 60);
 })();

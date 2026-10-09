@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class OidcVerifiableCredentialDefaultNonceServiceTests extends AbstractOidcTests {
 
     @Autowired
-    @Qualifier("oidcVerifiableCredentialNonceService")
+    @Qualifier(OidcVerifiableCredentialNonceService.BEAN_NAME)
     private OidcVerifiableCredentialNonceService oidcVerifiableCredentialNonceService;
 
     @Test
@@ -31,13 +31,13 @@ class OidcVerifiableCredentialDefaultNonceServiceTests extends AbstractOidcTests
         val nonce = oidcVerifiableCredentialNonceService.create();
         assertNotNull(nonce);
         assertNotNull(nonce.value());
-        assertNotNull(nonce.expiresAt());
+        assertNotNull(nonce.expiresIn());
     }
 
     @Test
     void verifyNonceExpiresInFuture() {
         val nonce = oidcVerifiableCredentialNonceService.create();
-        assertTrue(nonce.expiresAt().isAfter(Instant.now(Clock.systemUTC())));
+        assertEquals(300L, nonce.expiresIn());
     }
 
     @Test
@@ -49,6 +49,29 @@ class OidcVerifiableCredentialDefaultNonceServiceTests extends AbstractOidcTests
     @Test
     void verifyNonceDoesNotExistForUnknownValue() {
         assertFalse(oidcVerifiableCredentialNonceService.exists("TST-unknown-nonce-value"));
+    }
+
+    @Test
+    void verifyNonceIsConsumedExactlyOnce() {
+        val nonce = oidcVerifiableCredentialNonceService.create();
+        assertTrue(oidcVerifiableCredentialNonceService.consume(nonce.value()));
+        assertFalse(oidcVerifiableCredentialNonceService.consume(nonce.value()));
+        assertFalse(oidcVerifiableCredentialNonceService.exists(nonce.value()));
+    }
+
+    @Test
+    void verifyExpiredNonceIsNotConsumed() {
+        val nonce = oidcVerifiableCredentialNonceService.create();
+        val ticket = ticketRegistry.getTicket(nonce.value());
+        assertNotNull(ticket);
+        ticket.markTicketExpired();
+        assertFalse(oidcVerifiableCredentialNonceService.consume(nonce.value()));
+    }
+
+    @Test
+    void verifyConsumingAnUnknownNonceFails() {
+        assertFalse(oidcVerifiableCredentialNonceService.consume("TST-unknown-nonce-value"));
+        assertFalse(oidcVerifiableCredentialNonceService.consume(null));
     }
 
     @Test

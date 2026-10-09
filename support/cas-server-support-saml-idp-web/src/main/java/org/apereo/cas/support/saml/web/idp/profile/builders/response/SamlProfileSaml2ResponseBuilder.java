@@ -118,7 +118,7 @@ public class SamlProfileSaml2ResponseBuilder extends BaseSamlProfileSamlResponse
     protected boolean signSamlResponseFor(final SamlProfileBuilderContext context) {
         return context.getRegisteredService().getSignResponses().isTrue()
             || SamlIdPUtils.doesEntityDescriptorMatchEntityAttribute(context.getAdaptor().getEntityDescriptor(),
-            List.of(MetadataEntityAttributeQuery.of(SamlIdPConstants.KnownEntityAttributes.SHIBBOLETH_SIGN_RESPONSES.getName(),
+            List.of(MetadataEntityAttributeQuery.of(SamlIdPConstants.KnownEntityAttributes.SHIBBOLETH_SIGN_RESPONSES,
                 Attribute.URI_REFERENCE, List.of(Boolean.TRUE.toString()))));
     }
 
@@ -141,7 +141,8 @@ public class SamlProfileSaml2ResponseBuilder extends BaseSamlProfileSamlResponse
     protected Response encode(final SamlProfileBuilderContext context,
                               final Response samlResponse,
                               final String relayState) {
-        LOGGER.trace("Constructing encoder based on binding [{}] for [{}]", context.getBinding(), context.getAdaptor().getEntityId());
+        LOGGER.trace("Constructing encoder based on binding [{}] for [{}]",
+            context.getBinding(), context.getAdaptor().getEntityId());
         if (context.getBinding().equalsIgnoreCase(SAMLConstants.SAML2_ARTIFACT_BINDING_URI)) {
             val encoder = new SamlResponseArtifactEncoder(
                 getConfigurationContext().getVelocityEngineFactory(),

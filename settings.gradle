@@ -2,15 +2,14 @@
     The Develocity gradle plugin MUST be applied here.
  */
 plugins {
-    id "com.gradle.develocity" version "4.4.1"
-    id "com.gradle.common-custom-user-data-gradle-plugin" version "2.6.0"
+    id "com.gradle.develocity" version "4.6.0"
+    id "com.gradle.common-custom-user-data-gradle-plugin" version "2.8.0"
     id "org.gradle.toolchains.foojay-resolver-convention" version "1.0.0"
 }
 
 ext.isCiServer = System.getenv().containsKey("CI")
 ext.githubPackageRegistryUser = System.getenv("GH_PACKAGE_REGISTRY_USER")
 ext.githubPackageRegistryPassword = System.getenv("GH_PACKAGE_REGISTRY_TOKEN")
-
 
 buildCache {
     local { enabled = true }
@@ -24,6 +23,7 @@ buildCache {
 
 develocity {
     server = "${develocityApereoServerUrl}"
+    projectId = "apereo"
     buildScan {
         publishing.onlyIf { it.authenticated }
         uploadInBackground = !isCiServer
@@ -118,6 +118,7 @@ include "api:cas-server-core-api-cookie"
 include "api:cas-server-core-api-configuration"
 include "api:cas-server-core-api-configuration-model"
 include "api:cas-server-core-api-events"
+include "api:cas-server-core-api-ha"
 include "api:cas-server-core-api-logout"
 include "api:cas-server-core-api-mfa"
 include "api:cas-server-core-api-monitor"
@@ -166,6 +167,7 @@ include "core:cas-server-core-services-authentication"
 include "core:cas-server-core-services-registry"
 include "core:cas-server-core-tickets"
 include "core:cas-server-core-tickets-api"
+include "core:cas-server-core-tracing"
 include "core:cas-server-core-util"
 include "core:cas-server-core-util-api"
 include "core:cas-server-core-validation"
@@ -459,6 +461,7 @@ include "support:cas-server-support-sms-nexmo"
 include "support:cas-server-support-sms-textmagic"
 include "support:cas-server-support-spnego"
 include "support:cas-server-support-spnego-webflow"
+include "support:cas-server-support-stateless-ticket-registry-api"
 include "support:cas-server-support-stateless-ticket-registry"
 include "support:cas-server-support-surrogate-api"
 include "support:cas-server-support-surrogate-core"

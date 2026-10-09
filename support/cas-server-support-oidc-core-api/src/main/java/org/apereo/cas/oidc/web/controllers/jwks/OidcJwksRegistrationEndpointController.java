@@ -1,20 +1,22 @@
 package org.apereo.cas.oidc.web.controllers.jwks;
 
 import module java.base;
+import org.apereo.cas.audit.AuditableContext;
 import org.apereo.cas.oidc.OidcConfigurationContext;
 import org.apereo.cas.oidc.OidcConstants;
 import org.apereo.cas.oidc.jwks.register.ClientJwksRegistrationRequest;
 import org.apereo.cas.oidc.jwks.register.ClientJwksRegistrationResponse;
 import org.apereo.cas.oidc.jwks.register.ClientJwksRegistrationStore;
 import org.apereo.cas.oidc.web.controllers.BaseOidcController;
+import org.apereo.cas.services.OidcRegisteredService;
+import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
+import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSObject;
-import com.nimbusds.jose.JWSVerifier;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
-import com.nimbusds.jose.crypto.Ed25519Verifier;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.OctetKeyPair;
@@ -84,7 +86,16 @@ public class OidcJwksRegistrationEndpointController extends BaseOidcController {
             || !accessTokenTicket.getScopes().contains(OidcConstants.CLIENT_JWKS_REGISTRATION_SCOPE)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid access token");
         }
-
+        val clientId = accessTokenTicket.getClientId();
+        val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(
+            configurationContext.getServicesManager(), clientId, OidcRegisteredService.class);
+        val audit = AuditableContext.builder()
+            .registeredService(registeredService)
+            .authentication(accessTokenTicket.getAuthentication())
+            .build();
+        val accessResult = configurationContext.getRegisteredServiceAccessStrategyEnforcer().execute(audit);
+        accessResult.throwExceptionIfNeeded();
+        
         val jws = JWSObject.parse(registrationRequest.proof());
 
         val alg = jws.getHeader().getAlgorithm();
@@ -92,17 +103,18 @@ public class OidcJwksRegistrationEndpointController extends BaseOidcController {
             () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid algorithm: " + alg));
 
         val jwk = jws.getHeader().getJWK();
-        val verifier = switch (jwk) {
-            case ECKey ecKey -> new ECDSAVerifier(ecKey);
-            case RSAKey rsaKey -> new RSASSAVerifier(rsaKey);
-            case OctetKeyPair okp -> new Ed25519Verifier(okp.toPublicJWK());
+        val verified = switch (jwk) {
+            case ECKey ecKey -> jws.verify(new ECDSAVerifier(ecKey));
+            case RSAKey rsaKey -> jws.verify(new RSASSAVerifier(rsaKey));
+            case OctetKeyPair okp -> JWSAlgorithm.EdDSA.equals(alg) && EncodingUtils.verifyJwsSignature(
+                EncodingUtils.newJsonWebKey(okp.toPublicJWK().toJSONString()).getKey(), jws.serialize()) != null;
             default -> throw new IllegalArgumentException("Unsupported key type: " + jwk.getKeyType());
         };
-        if (!jws.verify((JWSVerifier) verifier)) {
+        if (!verified) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid signature");
         }
         val jkt = jwk.computeThumbprint().toString();
-        clientJwksRegistrationStore.save(jkt, jwk.toPublicJWK().toJSONString());
+        clientJwksRegistrationStore.save(accessTokenTicket.getClientId(), jkt, jwk.toPublicJWK().toJSONString());
         return ResponseEntity.ok(new ClientJwksRegistrationResponse(jkt));
     }
 

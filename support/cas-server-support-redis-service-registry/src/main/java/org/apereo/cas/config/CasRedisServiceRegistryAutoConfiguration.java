@@ -16,7 +16,6 @@ import org.apereo.cas.util.spring.beans.BeanSupplier;
 import org.apereo.cas.util.spring.boot.ConditionalOnFeatureEnabled;
 import lombok.val;
 import org.jooq.lambda.Unchecked;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -40,7 +39,7 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 public class CasRedisServiceRegistryAutoConfiguration {
     private static final BeanCondition CONDITION = BeanCondition.on("cas.service-registry.redis.enabled").isTrue().evenIfMissing();
 
-    @Bean
+    @Bean(defaultCandidate = false)
     @ConditionalOnMissingBean(name = "redisServiceConnectionFactory")
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     public RedisConnectionFactory redisServiceConnectionFactory(
@@ -76,15 +75,19 @@ public class CasRedisServiceRegistryAutoConfiguration {
     @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
     @ConditionalOnMissingBean(name = "redisServiceRegistry")
     public ServiceRegistry redisServiceRegistry(
-        final ObjectProvider<@NonNull List<ServiceRegistryListener>> serviceRegistryListeners,
+        final ObjectProvider<List<ServiceRegistryListener>> serviceRegistryListeners,
         @Qualifier("registeredServiceRedisTemplate")
         final CasRedisTemplate<String, RegisteredService> registeredServiceRedisTemplate,
         final ConfigurableApplicationContext applicationContext,
         final CasConfigurationProperties casProperties) {
         return BeanSupplier.of(ServiceRegistry.class)
             .when(CONDITION.given(applicationContext.getEnvironment()))
-            .supply(() -> new RedisServiceRegistry(applicationContext, registeredServiceRedisTemplate,
-                Optional.ofNullable(serviceRegistryListeners.getIfAvailable()).orElseGet(ArrayList::new)))
+            .supply(() -> {
+                val registry = new RedisServiceRegistry(applicationContext, registeredServiceRedisTemplate,
+                    Optional.ofNullable(serviceRegistryListeners.getIfAvailable()).orElseGet(ArrayList::new));
+                registry.setOrder(casProperties.getServiceRegistry().getRedis().getOrder());
+                return registry;
+            })
             .otherwiseProxy()
             .get();
 

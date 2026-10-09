@@ -1,4 +1,6 @@
-description = "Apereo CAS Core Configuration Metadata Repository"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Publishes CAS configuration metadata so tools can present available settings accurately."
 ext {
     publishMetadata = true
     projectMetadata = [
@@ -16,5 +18,7 @@ dependencies {
     
     implementation libraries.springbootconfigmetadata
 
+    testImplementation project(":core:cas-server-core-web")
+    
     testImplementation project(path: ":core:cas-server-core-util-api", configuration: "tests")
 }

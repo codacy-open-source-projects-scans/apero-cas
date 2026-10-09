@@ -1,10 +1,11 @@
-description = "Apereo CAS Server OpenID Connect Core"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Provides the core OpenID Connect provider behavior used by CAS OIDC features."
 dependencies {
     implementation libraries.jose4j
     implementation libraries.nimbus
     
     api project(":api:cas-server-core-api-throttle")
-
 
     implementation project(":core:cas-server-core-services-api")
     implementation project(":core:cas-server-core-services-registry")
@@ -12,6 +13,7 @@ dependencies {
     implementation project(":core:cas-server-core-authentication-attributes")
     implementation project(":core:cas-server-core-util-api")
     implementation project(":core:cas-server-core-audit-api")
+    implementation project(":support:cas-server-support-oauth-api")
 
     testImplementation project(":core:cas-server-core-scripting")
     testImplementation project(":core:cas-server-core-services")

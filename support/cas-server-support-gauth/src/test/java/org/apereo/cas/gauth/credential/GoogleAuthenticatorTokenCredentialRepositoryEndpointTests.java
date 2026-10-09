@@ -34,10 +34,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Tag("MFAProvider")
 class GoogleAuthenticatorTokenCredentialRepositoryEndpointTests extends AbstractCasEndpointTests {
     @Autowired
-    @Qualifier("googleAuthenticatorTokenCredentialRepositoryEndpoint")
-    private GoogleAuthenticatorTokenCredentialRepositoryEndpoint endpoint;
-
-    @Autowired
     @Qualifier(BaseGoogleAuthenticatorTokenCredentialRepository.BEAN_NAME)
     private OneTimeTokenCredentialRepository registry;
 
@@ -63,6 +59,23 @@ class GoogleAuthenticatorTokenCredentialRepositoryEndpointTests extends Abstract
         val device = devices.getFirst();
         googleAuthenticatorMultifactorAuthenticationProvider.getDeviceManager().removeRegisteredDevice(principal, device.getId());
         assertFalse(googleAuthenticatorMultifactorAuthenticationProvider.getDeviceManager().hasRegisteredDevices(principal));
+    }
+
+    @Test
+    void verifyDeviceManagerIgnoresDevicesOfOtherUsers() {
+        val acct = registry.create(UUID.randomUUID().toString());
+        registry.save(acct);
+        val owner = RegisteredServiceTestUtils.getPrincipal(acct.getUsername());
+        val deviceManager = googleAuthenticatorMultifactorAuthenticationProvider.getDeviceManager();
+        val device = deviceManager.findRegisteredDevices(owner).getFirst();
+
+        val otherUser = RegisteredServiceTestUtils.getPrincipal(UUID.randomUUID().toString());
+        deviceManager.removeRegisteredDevice(otherUser, device.getId());
+        assertTrue(deviceManager.hasRegisteredDevices(owner));
+        assertNotNull(registry.get(acct.getUsername(), Long.parseLong(device.getId())));
+
+        assertDoesNotThrow(() -> deviceManager.removeRegisteredDevice(owner, "not-a-number"));
+        assertTrue(deviceManager.hasRegisteredDevices(owner));
     }
 
     @Test
@@ -133,13 +146,6 @@ class GoogleAuthenticatorTokenCredentialRepositoryEndpointTests extends Abstract
     @Test
     void verifyUsernameAndDeviceId() throws Throwable {
         val acct = registry.create(UUID.randomUUID().toString());
-        GoogleAuthenticatorAccount.builder()
-            .username(acct.getUsername())
-            .secretKey(acct.getSecretKey())
-            .validationCode(acct.getValidationCode())
-            .scratchCodes(acct.getScratchCodes())
-            .name(UUID.randomUUID().toString())
-            .build();
         mockMvc.perform(get("/actuator/gauthCredentialRepository/%s/%s".formatted(acct.getUsername(), acct.getId()))
                 .contentType(MediaType.APPLICATION_JSON_VALUE)
                 .accept(MediaType.APPLICATION_JSON)

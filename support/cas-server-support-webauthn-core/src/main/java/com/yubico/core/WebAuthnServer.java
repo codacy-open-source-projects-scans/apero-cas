@@ -1,6 +1,9 @@
 package com.yubico.core;
+
 import module java.base;
 import org.apereo.cas.configuration.CasConfigurationProperties;
+import org.apereo.cas.webauthn.WebAuthnUtils;
+import org.apereo.cas.webauthn.WebAuthnUtils.PasskeyProvider;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,12 +28,15 @@ import com.yubico.webauthn.StartAssertionOptions;
 import com.yubico.webauthn.StartRegistrationOptions;
 import com.yubico.webauthn.attestation.Attestation;
 import com.yubico.webauthn.attestation.AttestationMetadataSource;
+import com.yubico.webauthn.data.AttestationConveyancePreference;
+import com.yubico.webauthn.data.AuthenticatorAttachment;
 import com.yubico.webauthn.data.AuthenticatorData;
 import com.yubico.webauthn.data.AuthenticatorSelectionCriteria;
 import com.yubico.webauthn.data.AuthenticatorTransport;
 import com.yubico.webauthn.data.ByteArray;
 import com.yubico.webauthn.data.ResidentKeyRequirement;
 import com.yubico.webauthn.data.UserIdentity;
+import com.yubico.webauthn.data.UserVerificationRequirement;
 import com.yubico.webauthn.exception.AssertionFailedException;
 import com.yubico.webauthn.exception.RegistrationFailedException;
 import lombok.AllArgsConstructor;
@@ -40,8 +46,10 @@ import lombok.Setter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.apache.commons.lang3.StringUtils;
 import org.jooq.lambda.Unchecked;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import jakarta.servlet.http.HttpServletRequest;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -51,6 +59,7 @@ import java.security.cert.X509Certificate;
 @RequiredArgsConstructor
 public class WebAuthnServer {
     private static final int IDENTIFIER_LENGTH = 32;
+    private static final String PASSKEY_NICKNAME = "Passkey";
     private static final ObjectMapper OBJECT_MAPPER = JacksonCodecs.json();
 
     private final RegistrationStorage userStorage;
@@ -61,6 +70,24 @@ public class WebAuthnServer {
     private final SessionManager sessionManager;
     private final CasConfigurationProperties casProperties;
 
+    /**
+     * Resident key requirement for a registration. A discoverable credential is required when the user asks for one;
+     * otherwise one is preferred when WebAuthn may be used for primary authentication, so that the credential can also
+     * serve as a passkey, and discouraged when WebAuthn is only a second factor, which keeps resident key slots on
+     * security keys free.
+     *
+     * @param discoverableCredentialRequested whether the user asked for a discoverable credential
+     * @return the resident key requirement
+     */
+    public ResidentKeyRequirement determineResidentKeyRequirement(final boolean discoverableCredentialRequested) {
+        if (discoverableCredentialRequested) {
+            return ResidentKeyRequirement.REQUIRED;
+        }
+        return casProperties.getAuthn().getMfa().getWebAuthn().getCore().isAllowPrimaryAuthentication()
+            ? ResidentKeyRequirement.PREFERRED
+            : ResidentKeyRequirement.DISCOURAGED;
+    }
+
     public Either<String, RegistrationRequest> startRegistration(
         final HttpServletRequest request,
         @NonNull final String username,
@@ -68,11 +95,66 @@ public class WebAuthnServer {
         final Optional<String> credentialNickname,
         final ResidentKeyRequirement residentKeyRequirement,
         final Optional<ByteArray> sessionToken) {
+        return startRegistration(request, username, Optional.empty(), displayName,
+            credentialNickname, residentKeyRequirement, sessionToken, false);
+    }
+
+    /**
+     * Start a registration that the browser's password manager may complete on its own right after a password login
+     * (WebAuthn conditional create), turning the password account into a passkey account. It is refused unless the
+     * passkey upgrade is enabled together with primary authentication and untrusted attestation, since such a passkey
+     * comes without attestation and is only useful for passkey login. The request asks for a discoverable credential
+     * with no authenticator attachment, preferred user verification and no attestation; the user entity is named after
+     * the username typed at login so that the password manager matches it with the saved password, while the
+     * registration itself belongs to the principal.
+     *
+     * @param request        the request
+     * @param username       the principal id that owns the registration
+     * @param userEntityName the username typed at login, used as the WebAuthn user entity name
+     * @param displayName    the display name
+     * @return the registration request, or the reason it was refused
+     */
+    public Either<String, RegistrationRequest> startConditionalRegistration(
+        final HttpServletRequest request,
+        @NonNull final String username,
+        final Optional<String> userEntityName,
+        final Optional<String> displayName) {
+        val core = casProperties.getAuthn().getMfa().getWebAuthn().getCore();
+        if (!core.isPasskeyUpgradeEnabled() || !core.isAllowPrimaryAuthentication() || !core.isAllowUntrustedAttestation()) {
+            return Either.left("Passkey upgrades are not enabled.");
+        }
+        return startRegistration(request, username, userEntityName, displayName,
+            Optional.empty(), ResidentKeyRequirement.REQUIRED, Optional.empty(), true);
+    }
+
+    /**
+     * Start registration.
+     *
+     * @param request                the request
+     * @param username               the principal id that owns the registration
+     * @param userEntityName         the WebAuthn user entity name, when it differs from the principal id
+     * @param displayName            the display name
+     * @param credentialNickname     the credential nickname
+     * @param residentKeyRequirement the resident key requirement
+     * @param sessionToken           the session token
+     * @param conditional            whether this is a conditional create registration
+     * @return the registration request, or the reason it was refused
+     */
+    private Either<String, RegistrationRequest> startRegistration(
+        final HttpServletRequest request,
+        final String username,
+        final Optional<String> userEntityName,
+        final Optional<String> displayName,
+        final Optional<String> credentialNickname,
+        final ResidentKeyRequirement residentKeyRequirement,
+        final Optional<ByteArray> sessionToken,
+        final boolean conditional) {
 
         LOGGER.trace("Starting registration operation for username: [{}], credentialNickname: [{}]", username, credentialNickname);
         val registrations = userStorage.getRegistrationsByUsername(username);
         val existingUser = registrations.stream().findAny().map(CredentialRegistration::getUserIdentity);
-        val permissionGranted = casProperties.getAuthn().getMfa().getWebAuthn().getCore().isMultipleDeviceRegistrationEnabled()
+        val properties = casProperties.getAuthn().getMfa().getWebAuthn();
+        val permissionGranted = properties.getCore().isMultipleDeviceRegistrationEnabled()
             || existingUser.map(userIdentity -> sessionManager.isSessionForUser(request, userIdentity.getId(), sessionToken)).orElse(true);
 
         if (permissionGranted) {
@@ -83,21 +165,44 @@ public class WebAuthnServer {
                     .id(SessionManager.generateRandom(IDENTIFIER_LENGTH))
                     .build()
             );
+            val userEntity = userEntityName
+                .filter(StringUtils::isNotBlank)
+                .map(name -> registrationUserId.toBuilder().name(name).build())
+                .orElse(registrationUserId);
 
+            val authenticatorAttachementProperty = properties.getCore().getAuthenticatorAttachment();
+            val authenticatorAttachement = StringUtils.isNotBlank(authenticatorAttachementProperty) && !conditional
+                ? AuthenticatorAttachment.valueOf(authenticatorAttachementProperty.toUpperCase(Locale.ROOT))
+                : null;
+            val userVerificationRequirementProperty = properties.getCore().getUserVerificationRequirement();
+            val configuredUserVerification = StringUtils.isNotBlank(userVerificationRequirementProperty)
+                ? UserVerificationRequirement.valueOf(userVerificationRequirementProperty.toUpperCase(Locale.ROOT))
+                : null;
+            val userVerificationRequirement = conditional ? UserVerificationRequirement.PREFERRED : configuredUserVerification;
+            val creationOptions = relyingParty.startRegistration(
+                StartRegistrationOptions.builder()
+                    .user(userEntity)
+                    .authenticatorSelection(AuthenticatorSelectionCriteria.builder()
+                        .authenticatorAttachment(authenticatorAttachement)
+                        .userVerification(userVerificationRequirement)
+                        .residentKey(residentKeyRequirement)
+                        .build()
+                    )
+                    .hints(properties.getCore().getHints())
+                    .build()
+            );
             val registrationRequest = new RegistrationRequest(
                 username,
                 credentialNickname,
                 SessionManager.generateRandom(IDENTIFIER_LENGTH),
-                relyingParty.startRegistration(
-                    StartRegistrationOptions.builder()
-                        .user(registrationUserId)
-                        .authenticatorSelection(AuthenticatorSelectionCriteria.builder()
-                            .residentKey(residentKeyRequirement)
-                            .build()
-                        )
+                conditional
+                    ? creationOptions.toBuilder()
+                        .attestation(AttestationConveyancePreference.NONE)
+                        .excludeCredentials(userStorage.getCredentialIdsForUsername(username))
                         .build()
-                ),
-                Optional.of(sessionManager.createSession(request, registrationUserId.getId()))
+                    : creationOptions,
+                Optional.of(sessionManager.createSession(request, registrationUserId.getId())),
+                conditional
             );
             registerRequestStorage.put(request, registrationRequest.requestId(), registrationRequest);
             return Either.right(registrationRequest);
@@ -127,6 +232,7 @@ public class WebAuthnServer {
                     FinishRegistrationOptions.builder()
                         .request(registrationRequest.publicKeyCredentialCreationOptions())
                         .response(registrationResponse.credential())
+                        .isConditionalCreate(registrationRequest.conditional())
                         .build()
                 );
 
@@ -157,7 +263,8 @@ public class WebAuthnServer {
                         registrationResponse,
                         addRegistration(
                             registrationRequest.publicKeyCredentialCreationOptions().getUser(),
-                            registrationRequest.credentialNickname(),
+                            registrationRequest.username(),
+                            determineCredentialNickname(registrationRequest, registration),
                             registration
                         ),
                         registration.isAttestationTrusted() || relyingParty.isAllowUntrustedAttestation(),
@@ -174,32 +281,71 @@ public class WebAuthnServer {
         }
     }
 
+    /**
+     * Nickname for a new registration. Regular registrations keep the nickname the user chose; a conditional create
+     * registration, which the user never named, is named after its passkey provider, or simply "Passkey" when the
+     * provider is unknown.
+     *
+     * @param registrationRequest the registration request
+     * @param registration        the registration result
+     * @return the nickname
+     */
+    private static Optional<String> determineCredentialNickname(final RegistrationRequest registrationRequest,
+                                                                final RegistrationResult registration) {
+        if (!registrationRequest.conditional()) {
+            return registrationRequest.credentialNickname();
+        }
+        return registrationRequest.credentialNickname()
+            .filter(StringUtils::isNotBlank)
+            .or(() -> WebAuthnUtils.toAaguid(registration.getAaguid()).flatMap(WebAuthnUtils::getPasskeyProviderName))
+            .or(() -> Optional.of(PASSKEY_NICKNAME));
+    }
+
     public Either<List<String>, AssertionRequestWrapper> startAuthentication(final HttpServletRequest request, final Optional<String> username) {
         if (username.isPresent() && !userStorage.userExists(username.get())) {
             return Either.left(List.of("The username %s is not registered.".formatted(username.get())));
         }
+        val core = casProperties.getAuthn().getMfa().getWebAuthn().getCore();
+        val userVerificationRequirementProperty = core.getUserVerificationRequirement();
+        val userVerificationRequirement = StringUtils.isNotBlank(userVerificationRequirementProperty)
+            ? UserVerificationRequirement.valueOf(userVerificationRequirementProperty.toUpperCase(Locale.ROOT))
+            : null;
         val assertionRequest = new AssertionRequestWrapper(
             SessionManager.generateRandom(IDENTIFIER_LENGTH),
-            relyingParty.startAssertion(StartAssertionOptions.builder().username(username).build())
+            relyingParty.startAssertion(StartAssertionOptions.builder()
+                .username(username)
+                .userVerification(userVerificationRequirement)
+                .hints(core.getHints())
+                .build())
         );
         assertRequestStorage.put(request, assertionRequest.getRequestId(), assertionRequest);
         return Either.right(assertionRequest);
     }
 
-    public Either<List<String>, SuccessfulAuthenticationResult> finishAuthentication(final HttpServletRequest request, final String responseJson) {
+    /**
+     * Finish authentication.
+     * <p>A failed assertion is reported as an unknown credential when the account that owns it, identified by the
+     * user handle in the assertion or else by the username of the request, no longer holds the credential, so the
+     * browser can stop offering it through the WebAuthn Signal API.</p>
+     *
+     * @param request      the request
+     * @param responseJson the response json
+     * @return the authentication result, or the failure
+     */
+    public Either<AuthenticationFailure, SuccessfulAuthenticationResult> finishAuthentication(final HttpServletRequest request, final String responseJson) {
         final AssertionResponse assertionResponse;
         try {
             assertionResponse = OBJECT_MAPPER.readValue(responseJson, AssertionResponse.class);
         } catch (final Exception e) {
             LOGGER.debug("Failed to decode response object", e);
-            return Either.left(List.of("Assertion failed!", "Failed to decode response object.", e.getMessage()));
+            return Either.left(AuthenticationFailure.of("Assertion failed!", "Failed to decode response object.", e.getMessage()));
         }
 
         val assertionRequestWrapper = assertRequestStorage.getIfPresent(request, assertionResponse.requestId());
         assertRequestStorage.invalidate(request, assertionResponse.requestId());
 
         if (assertionRequestWrapper == null) {
-            return Either.left(List.of("Assertion failed!", "No such assertion in progress."));
+            return Either.left(AuthenticationFailure.of("Assertion failed!", "No such assertion in progress."));
         } else {
             try {
                 val assertionResult = relyingParty.finishAssertion(
@@ -232,15 +378,34 @@ public class WebAuthnServer {
                         )
                     );
                 } else {
-                    return Either.left(List.of("Assertion failed: Invalid assertion."));
+                    return Either.left(AuthenticationFailure.of("Assertion failed: Invalid assertion."));
                 }
             } catch (final AssertionFailedException e) {
                 LOGGER.warn("Assertion failed", e);
-                return Either.left(List.of("Assertion failed", e.getMessage()));
+                return Either.left(new AuthenticationFailure(List.of("Assertion failed", e.getMessage()),
+                    isUnknownCredential(assertionRequestWrapper, assertionResponse)));
             } catch (final Exception e) {
                 LOGGER.error("Assertion failed", e);
-                return Either.left(List.of("Assertion failed unexpectedly; this is likely a bug.", e.getMessage()));
+                return Either.left(AuthenticationFailure.of("Assertion failed unexpectedly; this is likely a bug.", e.getMessage()));
             }
+        }
+    }
+
+    /**
+     * Failed authentication.
+     *
+     * @param messages          the messages describing the failure
+     * @param unknownCredential whether the asserted credential is no longer registered to its account
+     */
+    public record AuthenticationFailure(List<String> messages, boolean unknownCredential) {
+        /**
+         * Failure that does not concern an unknown credential.
+         *
+         * @param messages the messages
+         * @return the authentication failure
+         */
+        public static AuthenticationFailure of(final String... messages) {
+            return new AuthenticationFailure(List.of(messages), false);
         }
     }
 
@@ -265,6 +430,8 @@ public class WebAuthnServer {
 
         ByteArray sessionToken;
 
+        @Nullable PasskeyProvider passkeyProvider;
+
         public SuccessfulRegistrationResult(final RegistrationRequest request,
                                             final RegistrationResponse response,
                                             final CredentialRegistration registration,
@@ -282,6 +449,7 @@ public class WebAuthnServer {
             this.authData = response.credential().getResponse().getParsedAuthenticatorData();
             this.username = request.username();
             this.sessionToken = sessionToken;
+            this.passkeyProvider = WebAuthnUtils.getPasskeyProvider(registration.getAaguid()).orElse(null);
             this.success = true;
         }
 
@@ -327,6 +495,8 @@ public class WebAuthnServer {
 
         ByteArray sessionToken;
 
+        @Nullable PasskeyProvider passkeyProvider;
+
         public SuccessfulAuthenticationResult(final AssertionRequestWrapper request, final AssertionResponse response,
                                               final Collection<CredentialRegistration> registrations,
                                               final String username, final ByteArray sessionToken) {
@@ -336,8 +506,26 @@ public class WebAuthnServer {
                 registrations,
                 response.credential().getResponse().getParsedAuthenticatorData(),
                 username,
-                sessionToken
+                sessionToken,
+                findPasskeyProvider(registrations, response.credential().getId())
             );
+        }
+
+        /**
+         * Passkey provider of the registration whose credential answered the assertion.
+         *
+         * @param registrations the registrations of the user
+         * @param credentialId  the id of the credential that answered
+         * @return the passkey provider, or null when unknown
+         */
+        private static @Nullable PasskeyProvider findPasskeyProvider(final Collection<CredentialRegistration> registrations,
+                                                                     final ByteArray credentialId) {
+            return registrations.stream()
+                .filter(registration -> registration.getCredential() != null
+                    && credentialId.equals(registration.getCredential().getCredentialId()))
+                .findFirst()
+                .flatMap(registration -> WebAuthnUtils.getPasskeyProvider(registration.getAaguid()))
+                .orElse(null);
         }
     }
 
@@ -375,21 +563,63 @@ public class WebAuthnServer {
         }
     }
 
+    /**
+     * Whether the asserted credential is no longer registered to the account that owns it. The owner is the account
+     * of the user handle in the assertion, or else the username of the request; the answer is read from that
+     * account's registrations rather than from the repository's credential index, which may lag behind other nodes.
+     * Nothing is reported when the owner cannot be found, since a credential the repository merely does not know
+     * yet must never be signalled as unknown.
+     *
+     * @param assertionRequest  the assertion request
+     * @param assertionResponse the assertion response
+     * @return true if the owning account no longer holds the credential
+     */
+    private boolean isUnknownCredential(final AssertionRequestWrapper assertionRequest, final AssertionResponse assertionResponse) {
+        try {
+            val credential = assertionResponse.credential();
+            return credential.getResponse().getUserHandle()
+                .flatMap(userStorage::getUsernameForUserHandle)
+                .or(assertionRequest::getUsername)
+                .map(username -> userStorage.getRegistrationByUsernameAndCredentialId(username, credential.getId()).isEmpty())
+                .orElse(Boolean.FALSE);
+        } catch (final Exception e) {
+            LOGGER.warn("Unable to determine whether the asserted credential is still registered", e);
+            return false;
+        }
+    }
+
+    /**
+     * Add the registration for the principal. The user entity given to the authenticator may carry another name, the
+     * username typed at login for a passkey upgrade; the registration keeps the principal id as the user name and
+     * remembers that other name, so that later signals to the browser keep the name the password manager knows.
+     *
+     * @param userEntity the user entity given to the authenticator
+     * @param username   the principal id that owns the registration
+     * @param nickname   the nickname
+     * @param result     the registration result
+     * @return the credential registration
+     */
     private CredentialRegistration addRegistration(
-        final UserIdentity userIdentity,
+        final UserIdentity userEntity,
+        final String username,
         final Optional<String> nickname,
         final RegistrationResult result) {
-
+        val userIdentity = userEntity.toBuilder().name(username).build();
         return addRegistration(
             userIdentity,
+            Optional.of(userEntity.getName()).filter(name -> !name.equals(username)),
             nickname,
             RegisteredCredential.builder()
                 .credentialId(result.getKeyId().getId())
                 .userHandle(userIdentity.getId())
                 .publicKeyCose(result.getPublicKeyCose())
                 .signatureCount(result.getSignatureCount())
+                .backupEligible(result.isBackupEligible())
+                .backupState(result.isBackedUp())
                 .build(),
             result.getKeyId().getTransports().orElseGet(TreeSet::new),
+            result.isDiscoverable(),
+            WebAuthnUtils.toAaguid(result.getAaguid()),
             result
                 .getAttestationTrustPath()
                 .flatMap(x5c -> x5c.stream().findFirst())
@@ -402,12 +632,14 @@ public class WebAuthnServer {
                 }));
     }
 
-
     private CredentialRegistration addRegistration(
         final UserIdentity userIdentity,
+        final Optional<String> userEntityName,
         final Optional<String> nickname,
         final RegisteredCredential credential,
         final SortedSet<AuthenticatorTransport> transports,
+        final Optional<Boolean> discoverable,
+        final Optional<String> aaguid,
         final Optional<Attestation> attestationMetadata) {
         val reg = CredentialRegistration.builder()
             .userIdentity(userIdentity)
@@ -416,10 +648,12 @@ public class WebAuthnServer {
             .credential(credential)
             .transports(transports)
             .attestationMetadata(attestationMetadata.orElse(null))
+            .discoverable(discoverable.orElse(null))
+            .aaguid(aaguid.orElse(null))
+            .userEntityName(userEntityName.orElse(null))
             .build();
         LOGGER.debug("Adding registration: user: [{}], nickname: [{}], credential: [{}]", userIdentity, nickname, credential);
         userStorage.addRegistrationByUsername(userIdentity.getName(), reg);
         return reg;
     }
-
 }

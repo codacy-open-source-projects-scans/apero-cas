@@ -6,9 +6,9 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
+import lombok.SuperBuilder;
 import lombok.ToString;
 import lombok.With;
-import lombok.experimental.SuperBuilder;
 import org.jspecify.annotations.NonNull;
 import org.springframework.util.LinkedMultiValueMap;
 
@@ -35,10 +35,10 @@ public class PasswordManagementQuery implements Serializable {
     private final String phoneNumber;
 
     @Builder.Default
-    private final LinkedMultiValueMap<@NonNull String, @NonNull String> securityQuestions = new LinkedMultiValueMap<>();
+    private final LinkedMultiValueMap<String, @NonNull String> securityQuestions = new LinkedMultiValueMap<>();
 
     @Builder.Default
-    private final LinkedMultiValueMap<@NonNull String, @NonNull Object> record = new LinkedMultiValueMap<>();
+    private final LinkedMultiValueMap<String, @NonNull Object> record = new LinkedMultiValueMap<>();
 
     /**
      * Find attribute.

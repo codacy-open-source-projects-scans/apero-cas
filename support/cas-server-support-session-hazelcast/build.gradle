@@ -1,4 +1,6 @@
-description = "Apereo CAS Web Application Hazelcast Session Management"
+apply plugin: "org.apereo.cas.project-conventions"
+
+description = "Backs CAS web application sessions with Hazelcast for clustered deployments."
 ext {
     publishMetadata = true
     projectMetadata = [
@@ -11,6 +13,8 @@ dependencies {
     implementation project(":core:cas-server-core-configuration-api")
     implementation project(":core:cas-server-core-util-api")
 
+    api project(":api:cas-server-core-api-ha")
+    
     implementation libraries.springsession
     implementation libraries.springsessionhazelcast
     implementation libraries.hazelcast

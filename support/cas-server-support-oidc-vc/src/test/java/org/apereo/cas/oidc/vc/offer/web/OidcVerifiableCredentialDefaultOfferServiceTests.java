@@ -43,8 +43,7 @@ class OidcVerifiableCredentialDefaultOfferServiceTests extends AbstractOidcTests
         assertNotNull(offer.getGrants());
         val grant = offer.getGrants().getPreAuthorizedCodeGrant();
         assertNotNull(grant);
-        assertNotNull(grant.getTxCode());
-        assertTrue(grant.getTxCode().startsWith(TransientSessionTicket.PREFIX));
+        assertNotNull(grant.getTransactionCode());
         assertNotNull(grant.getPreAuthorizedCode());
         assertNotNull(grant.getIssuerState());
     }
@@ -69,7 +68,12 @@ class OidcVerifiableCredentialDefaultOfferServiceTests extends AbstractOidcTests
         assertEquals(List.of("VerifiableCredential"), offer.getCredentialConfigurationIds());
         val grant = offer.getGrants().getPreAuthorizedCodeGrant();
         assertNotNull(grant);
-        assertEquals(ticket.getId(), grant.getTxCode());
+        val transactionCode = ((TransientSessionTicket) ticket).getPropertyAsString(
+            OidcVerifiableCredentialTransactionService.PROPERTY_TRANSACTION_CODE);
+        assertNotEquals(ticket.getId(), transactionCode);
+        assertEquals(transactionCode, grant.getTransactionCode().getValue());
+        assertEquals(transactionCode.length(), grant.getTransactionCode().getLength());
+        assertEquals(ticket.getId(), offer.getTransactionId());
         assertNotNull(grant.getPreAuthorizedCode());
         assertNotNull(grant.getIssuerState());
     }

@@ -4,6 +4,8 @@ import module java.base;
 import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.ticket.AbstractTicket;
 import org.apereo.cas.ticket.ExpirationPolicy;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -22,13 +24,23 @@ public class OAuth20DefaultDeviceToken extends AbstractTicket implements OAuth20
 
     private final Service service;
 
+    private final String clientId;
+
     @Setter
     private String userCode;
 
+    @JsonSetter(nulls = Nulls.AS_EMPTY)
+    private Set<String> scopes = new HashSet<>();
+    
     public OAuth20DefaultDeviceToken(final String id, final Service service,
-                                     final ExpirationPolicy expirationPolicy) {
+                                     final ExpirationPolicy expirationPolicy,
+                                     @JsonSetter(nulls = Nulls.AS_EMPTY)
+                                     final Collection<String> scopes,
+                                     final String clientId) {
         super(id, expirationPolicy);
         this.service = service;
+        this.clientId = clientId;
+        this.scopes.addAll(scopes);
     }
 
     @Override

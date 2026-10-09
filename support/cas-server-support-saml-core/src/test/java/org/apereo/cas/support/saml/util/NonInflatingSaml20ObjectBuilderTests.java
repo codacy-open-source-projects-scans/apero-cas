@@ -11,7 +11,6 @@ import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.InetAddressUtils;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.xerces.xs.XSObject;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -102,7 +101,7 @@ class NonInflatingSaml20ObjectBuilderTests {
         assertNotNull(builder.newAttribute("email", "mail",
             List.of(new TicketGrantingTicketExpirationPolicy(100, 100)),
             Map.of("mail", "basic"), "basic",
-            Map.of("mail", XSObject.class.getSimpleName())));
+            Map.of("mail", "XSObject")));
     }
 
     @Test
@@ -111,7 +110,7 @@ class NonInflatingSaml20ObjectBuilderTests {
         assertNotNull(builder.newAttribute("email", "mail",
             List.of(),
             Map.of("mail", "basic"), "basic",
-            Map.of("mail", XSObject.class.getSimpleName())));
+            Map.of("mail", "XSObject")));
     }
 
     @Test
@@ -139,7 +138,7 @@ class NonInflatingSaml20ObjectBuilderTests {
 
         val confirmation = builder.newSubjectConfirmation("https://www.apereo.org/app/sp",
             ZonedDateTime.now(ZoneOffset.UTC), "2ab8d364-7d6a-4e3e-ab17-c48b87c487e2",
-            ZonedDateTime.now(ZoneOffset.UTC), InetAddressUtils.getByName("https://www.apereo.org/app/sp"));
+            ZonedDateTime.now(ZoneOffset.UTC), InetAddressUtils.getByName("https://www.apereo.org/app/sp").getHostAddress());
         val sub = builder.newSubject(id, subjectId, confirmation);
         assertNotNull(sub);
     }
@@ -166,19 +165,19 @@ class NonInflatingSaml20ObjectBuilderTests {
     void failSign() {
         val builder = new NonInflatingSaml20ObjectBuilder(openSamlConfigBean);
         assertThrows(IllegalArgumentException.class,
-            () -> builder.signSamlResponse("bad-response",
+            () -> AbstractSamlObjectBuilder.signSamlResponse("bad-response",
                 mock(PrivateKey.class), mock(PublicKey.class)));
         val response = builder.newResponse(UUID.randomUUID().toString(), ZonedDateTime.now(ZoneOffset.UTC), "cas",
             CoreAuthenticationTestUtils.getWebApplicationService());
         val result = SamlUtils.transformSamlObject(openSamlConfigBean, response, true).toString();
         assertThrows(IllegalArgumentException.class,
-            () -> builder.signSamlResponse(result,
+            () -> AbstractSamlObjectBuilder.signSamlResponse(result,
                 mock(PrivateKey.class), mock(PublicKey.class)));
         assertThrows(IllegalArgumentException.class,
             () -> {
                 val pubKey = mock(PublicKey.class);
                 when(pubKey.getAlgorithm()).thenReturn("RSA");
-                builder.signSamlResponse(result,
+                AbstractSamlObjectBuilder.signSamlResponse(result,
                     mock(PrivateKey.class), pubKey);
             });
     }

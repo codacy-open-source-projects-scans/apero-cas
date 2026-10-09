@@ -7,7 +7,8 @@ import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
-import org.apereo.cas.ticket.registry.TicketCompactor;
+import org.apereo.cas.ticket.registry.compact.CompactTicketAuthentication;
+import org.apereo.cas.ticket.registry.compact.TicketCompactor;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +39,11 @@ class OAuth20AccessTokenCompactorTests extends AbstractOAuth20Tests {
         servicesManager.save(registeredService);
         val token = defaultAccessTokenFactory.create(service,
             authentication, scopes, clientId, responseType, grantType);
+        token.setCredentialConfigurationIds(List.of("UniversityDegreeCredential"));
+        val authorizationDetails = List.of(new LinkedHashMap<String, Object>(Map.of("type", "openid_credential",
+            "credential_configuration_id", "UniversityDegreeCredential",
+            "credential_identifiers", List.of("UniversityDegreeCredential"))));
+        token.setAuthorizationDetails(authorizationDetails);
         assertSame(OAuth20AccessToken.class, oauth20AccessTokenTicketCompactor.getTicketType());
         val compacted = oauth20AccessTokenTicketCompactor.compact(token);
         assertNotNull(compacted);
@@ -48,12 +54,19 @@ class OAuth20AccessTokenCompactorTests extends AbstractOAuth20Tests {
 
         assertEquals(result.getResponseType(), token.getResponseType());
         assertEquals(result.getGrantType(), token.getGrantType());
+        assertEquals(List.of("UniversityDegreeCredential"), result.getCredentialConfigurationIds());
+        assertEquals(authorizationDetails, result.getAuthorizationDetails());
         assertEquals(result.getAuthentication().getPrincipal(), token.getAuthentication().getPrincipal());
+        assertEquals(List.of("SAML2Client"), result.getAuthentication().getAttributes().get(CompactTicketAuthentication.CLIENT_NAME_ATTRIBUTE));
+        assertEquals(token.getCreationTime().toEpochSecond(), result.getCreationTime().toEpochSecond());
+        assertEquals(token.getExpirationPolicy().toMaximumExpirationTime(token).toEpochSecond(),
+            result.getExpirationPolicy().toMaximumExpirationTime(result).toEpochSecond());
     }
 
     static Stream<Arguments> codeProvider() {
         val service = RegisteredServiceTestUtils.getService("https://code.oauth.org");
-        val authentication = RegisteredServiceTestUtils.getAuthentication();
+        val authentication = RegisteredServiceTestUtils.getAuthentication(RegisteredServiceTestUtils.getPrincipal("casuser"),
+            new HashMap<>(Map.of(CompactTicketAuthentication.CLIENT_NAME_ATTRIBUTE, List.of("SAML2Client"))));
         return Stream.of(
             Arguments.of(service, authentication,
                 Set.of("Scope1", "Scope2"), "clientid-code",

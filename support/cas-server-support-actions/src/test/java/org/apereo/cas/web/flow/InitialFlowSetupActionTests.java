@@ -4,9 +4,11 @@ import module java.base;
 import org.apereo.cas.CasProtocolConstants;
 import org.apereo.cas.authentication.AuthenticationEventExecutionPlan;
 import org.apereo.cas.authentication.AuthenticationServiceSelectionPlan;
+import org.apereo.cas.authentication.CoreAuthenticationTestUtils;
 import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.configuration.model.core.sso.SingleSignOnProperties;
 import org.apereo.cas.mock.MockTicketGrantingTicket;
+import org.apereo.cas.multitenancy.TenantExtractor;
 import org.apereo.cas.services.DefaultRegisteredServiceAccessStrategy;
 import org.apereo.cas.services.DefaultRegisteredServiceAuthenticationPolicy;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
@@ -44,6 +46,29 @@ import static org.mockito.Mockito.*;
 @Tag("WebflowActions")
 class InitialFlowSetupActionTests {
 
+    @TestPropertySource(properties = {
+        "cas.multitenancy.core.enabled=true",
+        "cas.multitenancy.json.location=classpath:/tenants.json"
+    })
+    @Nested
+    class MultitenancyTests extends AbstractWebflowActionsTests {
+        @Autowired
+        @Qualifier(CasWebflowConstants.ACTION_ID_INITIAL_FLOW_SETUP)
+        private Action action;
+        
+        @Test
+        void verifyOperation() throws Exception {
+            val context = MockRequestContext.create(applicationContext);
+            context.setContextPath("/tenants/shire/login");
+            action.execute(context);
+            assertTrue(context.getFlowScope().contains("tenantPath"));
+
+            val tenantDefinition = tenantExtractor.extract(context).orElseThrow();
+            assertEquals(TenantExtractor.toTenantPath(tenantDefinition),
+                context.getFlowScope().get("tenantPath", String.class));
+        }
+    }
+    
     @Nested
     class DefaultTests extends AbstractWebflowActionsTests {
 
@@ -101,7 +126,9 @@ class InitialFlowSetupActionTests {
             action = new InitialFlowSetupAction(List.of(argumentExtractor), servicesManager,
                 authenticationRequestServiceSelectionStrategies, tgtCookieGenerator,
                 warnCookieGenerator, casProperties, authenticationEventExecutionPlan,
-                new DefaultSingleSignOnParticipationStrategy(servicesManager, sso, mock(TicketRegistrySupport.class), mock(AuthenticationServiceSelectionPlan.class)),
+                new DefaultSingleSignOnParticipationStrategy(servicesManager, sso,
+                    mock(TicketRegistrySupport.class), CoreAuthenticationTestUtils.getAuthenticationSystemSupport(),
+                    mock(AuthenticationServiceSelectionPlan.class)),
                 mock(TicketRegistrySupport.class));
             action.afterPropertiesSet();
         }
@@ -141,6 +168,7 @@ class InitialFlowSetupActionTests {
     @TestPropertySource(properties = {
         "cas.authn.policy.source-selection-enabled=true",
         "cas.sso.sso-enabled=false",
+        "cas.sso.create-sso-cookie-on-renew-authn=false",
         "cas.tgc.crypto.enabled=false"
     })
     @Nested

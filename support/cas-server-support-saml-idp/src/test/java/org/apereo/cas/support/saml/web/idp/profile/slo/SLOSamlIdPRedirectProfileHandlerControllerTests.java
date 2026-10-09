@@ -2,32 +2,31 @@ package org.apereo.cas.support.saml.web.idp.profile.slo;
 
 import module java.base;
 import org.apereo.cas.support.saml.BaseSamlIdPConfigurationTests;
+import org.apereo.cas.support.saml.SamlIdPConstants;
 import org.apereo.cas.support.saml.services.SamlRegisteredService;
-import org.apereo.cas.support.saml.services.idp.metadata.SamlRegisteredServiceMetadataAdaptor;
+import org.apereo.cas.ticket.TransientSessionTicketFactory;
+import org.apereo.cas.util.junit.Assertions;
 import org.apereo.cas.web.support.WebUtils;
 import lombok.val;
 import net.shibboleth.shared.net.URLBuilder;
 import org.apache.commons.lang3.Strings;
 import org.apache.hc.core5.http.HttpStatus;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
-import org.opensaml.messaging.context.MessageContext;
+import org.opensaml.saml.common.SAMLException;
 import org.opensaml.saml.common.SAMLObjectBuilder;
 import org.opensaml.saml.common.xml.SAMLConstants;
 import org.opensaml.saml.saml2.core.Issuer;
 import org.opensaml.saml.saml2.core.LogoutRequest;
 import org.opensaml.saml.saml2.core.LogoutResponse;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.opensaml.saml.saml2.core.Status;
+import org.opensaml.saml.saml2.core.StatusCode;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.TestPropertySource;
-import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.test.web.servlet.MvcResult;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 /**
  * This is {@link SLOSamlIdPRedirectProfileHandlerControllerTests}.
@@ -36,106 +35,145 @@ import static org.junit.jupiter.api.Assertions.*;
  * @since 6.2.0
  */
 @Tag("SAML2Web")
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @TestPropertySource(properties = "cas.authn.saml-idp.metadata.file-system.location=file:src/test/resources/metadata")
 class SLOSamlIdPRedirectProfileHandlerControllerTests extends BaseSamlIdPConfigurationTests {
 
-    @Autowired
-    @Qualifier("sloRedirectProfileHandlerController")
-    private SLOSamlIdPRedirectProfileHandlerController controller;
-
-    @BeforeEach
-    void initialize() {
-        servicesManager.deleteAll();
-    }
-
     @Test
-    @Order(1)
     void verifyOperationRedirectWithParameter() throws Throwable {
-        val request = new MockHttpServletRequest();
-        request.setMethod("GET");
-        val response = new MockHttpServletResponse();
-
-        val service = getSamlRegisteredServiceFor(false, false, false, "https://cassp.example.org");
+        val service = getSamlRegisteredServiceFor(false, false, false, "https://cassp-logout.example.org");
         service.setLogoutUrl("https://github.com/apereo/cas");
 
-        executeTest(request, response, service);
+        val result = executeTest(service);
 
-        assertEquals(HttpStatus.SC_OK, response.getStatus());
-        assertNotNull(WebUtils.getLogoutRedirectUrl(request, String.class));
+        assertEquals(HttpStatus.SC_OK, result.getResponse().getStatus());
+        assertNotNull(WebUtils.getLogoutRedirectUrl(result.getRequest(), String.class));
     }
 
     @Test
-    @Order(2)
     void verifyOperationRedirectWithoutParameter() throws Throwable {
-        val request = new MockHttpServletRequest();
-        request.setMethod("GET");
-        val response = new MockHttpServletResponse();
-
         val service = getSamlRegisteredServiceFor(false, false, false, "https://cassp.example.org");
-        executeTest(request, response, service);
+        val result = executeTest(service);
 
-        assertEquals(HttpStatus.SC_OK, response.getStatus());
-        assertNull(WebUtils.getLogoutRedirectUrl(request, String.class));
+        assertEquals(HttpStatus.SC_OK, result.getResponse().getStatus());
+        assertNull(WebUtils.getLogoutRedirectUrl(result.getRequest(), String.class));
     }
 
     @Test
-    @Order(3)
     void verifyLogoutResponse() throws Throwable {
-        val request = new MockHttpServletRequest();
-        request.setMethod("GET");
-        val response = new MockHttpServletResponse();
-
         val service = getSamlRegisteredServiceFor(false, false, false, "https://cassp.example.org");
 
         servicesManager.save(service);
-        var builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory().getBuilder(LogoutResponse.DEFAULT_ELEMENT_NAME);
-        var logoutResponse = (LogoutResponse) builder.buildObject();
+        var logoutResponse = buildLogoutResponse(service);
 
-        builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory().getBuilder(Issuer.DEFAULT_ELEMENT_NAME);
-        val issuer = (Issuer) builder.buildObject();
-        issuer.setValue(service.getServiceId());
-        logoutResponse.setIssuer(issuer);
-        logoutResponse.setID(UUID.randomUUID().toString());
-        logoutResponse.setInResponseTo("https://cas.example.org");
+        val pendingRequest = (LogoutRequest) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(LogoutRequest.DEFAULT_ELEMENT_NAME)).buildObject(LogoutRequest.DEFAULT_ELEMENT_NAME);
+        pendingRequest.setID(logoutResponse.getInResponseTo());
+        SamlIdPProfileSingleLogoutMessageCreator.storeLogoutRequest(ticketFactory, ticketRegistry,
+            webApplicationServiceFactory.createService(service.getServiceId()), pendingRequest, service.getServiceId());
+
+        val request = new MockHttpServletRequest();
+        val response = new MockHttpServletResponse();
+        logoutResponse = signSamlObject(request, response, logoutResponse, service,
+            SAMLConstants.SAML2_REDIRECT_BINDING_URI, logoutResponse.getDestination());
 
         val encoder = new SamlIdPHttpRedirectDeflateEncoder("https://cas.example.org/logout", logoutResponse);
         encoder.setRelayState("CasRelayState");
         encoder.doEncode();
 
         assertTrue(encoder.getRedirectUrl().contains("CasRelayState"));
-        val queryStrings = Strings.CI.remove(encoder.getRedirectUrl(), "https://cas.example.org/logout?");
-        new URLBuilder(encoder.getRedirectUrl())
-            .getQueryParams().forEach(param -> request.addParameter(param.getFirst(), param.getSecond()));
-        request.setQueryString(queryStrings);
-        controller.handleSaml2ProfileSLORedirectRequest(response, request);
-        assertEquals(HttpStatus.SC_OK, response.getStatus());
+        val result = performSloRedirect(encoder.getRedirectUrl());
+        assertEquals(HttpStatus.SC_OK, result.getResponse().getStatus());
+        assertNull(ticketRegistry.getTicket(TransientSessionTicketFactory.normalizeTicketId(logoutResponse.getInResponseTo())));
     }
 
-    private void executeTest(final MockHttpServletRequest request, final HttpServletResponse response,
-                             final SamlRegisteredService service) throws Throwable {
+    @Test
+    void verifyUnsignedLogoutResponseRejected() throws Throwable {
+        val service = getSamlRegisteredServiceFor(false, false, false, "https://cassp.example.org");
         servicesManager.save(service);
-        var builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
-            .getBuilder(LogoutRequest.DEFAULT_ELEMENT_NAME);
-        var logoutRequest = (LogoutRequest) builder.buildObject();
+        val logoutResponse = buildLogoutResponse(service);
+        val encoder = new SamlIdPHttpRedirectDeflateEncoder("https://cas.example.org/logout", logoutResponse);
+        encoder.doEncode();
+        Assertions.assertThrowsWithRootCause(Exception.class, SAMLException.class,
+            () -> performSloRedirect(encoder.getRedirectUrl()));
+    }
 
-        builder = (SAMLObjectBuilder) openSamlConfigBean.getBuilderFactory()
-            .getBuilder(Issuer.DEFAULT_ELEMENT_NAME);
-        val issuer = (Issuer) builder.buildObject();
+    @Test
+    void verifyLogoutRequestReplayRejected() throws Throwable {
+        val service = getSamlRegisteredServiceFor(false, false, false, "https://cassp.example.org");
+        executeTest(service, true);
+    }
+
+    private MvcResult executeTest(final SamlRegisteredService service) throws Throwable {
+        return executeTest(service, false);
+    }
+
+    private MvcResult executeTest(final SamlRegisteredService service, final boolean replay) throws Throwable {
+        val request = new MockHttpServletRequest();
+        request.setMethod("GET");
+        val response = new MockHttpServletResponse();
+        servicesManager.save(service);
+        var builder = (SAMLObjectBuilder) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(LogoutRequest.DEFAULT_ELEMENT_NAME));
+        var logoutRequest = (LogoutRequest) Objects.requireNonNull(builder.buildObject());
+
+        builder = (SAMLObjectBuilder) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(Issuer.DEFAULT_ELEMENT_NAME));
+        val issuer = (Issuer) Objects.requireNonNull(builder.buildObject());
         issuer.setValue(service.getServiceId());
         logoutRequest.setIssuer(issuer);
-
-        val adaptor = SamlRegisteredServiceMetadataAdaptor
-            .get(samlRegisteredServiceCachingMetadataResolver, service, service.getServiceId()).get();
-        logoutRequest = samlIdPObjectSigner.encode(logoutRequest, service,
-            adaptor, response, request, SAMLConstants.SAML2_REDIRECT_BINDING_URI, logoutRequest, new MessageContext());
+        logoutRequest.setID('_' + UUID.randomUUID().toString());
+        logoutRequest.setIssueInstant(Instant.now(Clock.systemUTC()));
+        logoutRequest.setDestination("http://localhost" + SamlIdPConstants.ENDPOINT_SAML2_SLO_PROFILE_REDIRECT);
+        logoutRequest = signSamlObject(request, response, logoutRequest, service,
+            SAMLConstants.SAML2_REDIRECT_BINDING_URI, logoutRequest.getDestination());
 
         val encoder = new SamlIdPHttpRedirectDeflateEncoder("https://cas.example.org/logout", logoutRequest);
         encoder.doEncode();
-        val queryStrings = Strings.CI.remove(encoder.getRedirectUrl(), "https://cas.example.org/logout?");
-        new URLBuilder(encoder.getRedirectUrl())
-            .getQueryParams().forEach(param -> request.addParameter(param.getFirst(), param.getSecond()));
-        request.setQueryString(queryStrings);
-        controller.handleSaml2ProfileSLORedirectRequest(response, request);
+        val result = performSloRedirect(encoder.getRedirectUrl());
+        if (replay) {
+            Assertions.assertThrowsWithRootCause(Exception.class, SAMLException.class,
+                () -> performSloRedirect(encoder.getRedirectUrl()));
+        }
+        return result;
+    }
+
+    private MvcResult performSloRedirect(final String redirectUrl) throws Exception {
+        val queryStrings = Strings.CI.remove(redirectUrl, "https://cas.example.org/logout?");
+        val builder = get(SamlIdPConstants.ENDPOINT_SAML2_SLO_PROFILE_REDIRECT);
+        new URLBuilder(redirectUrl)
+            .getQueryParams()
+            .forEach(param -> builder.queryParam(param.getFirst(), param.getSecond()));
+        builder.with(request -> {
+            request.setQueryString(queryStrings);
+            return request;
+        });
+        return mockMvc.perform(builder).andReturn();
+    }
+
+    private LogoutResponse buildLogoutResponse(final SamlRegisteredService service) {
+        var builder = (SAMLObjectBuilder) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(LogoutResponse.DEFAULT_ELEMENT_NAME));
+        val logoutResponse = (LogoutResponse) Objects.requireNonNull(builder.buildObject());
+
+        builder = (SAMLObjectBuilder) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(Issuer.DEFAULT_ELEMENT_NAME));
+        val issuer = (Issuer) Objects.requireNonNull(builder.buildObject());
+        issuer.setValue(service.getServiceId());
+        logoutResponse.setIssuer(issuer);
+        logoutResponse.setID('_' + UUID.randomUUID().toString());
+        logoutResponse.setInResponseTo('_' + UUID.randomUUID().toString());
+        logoutResponse.setIssueInstant(Instant.now(Clock.systemUTC()));
+        logoutResponse.setDestination("http://localhost" + SamlIdPConstants.ENDPOINT_SAML2_SLO_PROFILE_REDIRECT);
+
+        builder = (SAMLObjectBuilder) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(Status.DEFAULT_ELEMENT_NAME));
+        val status = (Status) Objects.requireNonNull(builder.buildObject());
+        builder = (SAMLObjectBuilder) Objects.requireNonNull(openSamlConfigBean.getBuilderFactory()
+            .getBuilder(StatusCode.DEFAULT_ELEMENT_NAME));
+        val statusCode = (StatusCode) Objects.requireNonNull(builder.buildObject());
+        statusCode.setValue(StatusCode.SUCCESS);
+        status.setStatusCode(statusCode);
+        logoutResponse.setStatus(status);
+        return logoutResponse;
     }
 }

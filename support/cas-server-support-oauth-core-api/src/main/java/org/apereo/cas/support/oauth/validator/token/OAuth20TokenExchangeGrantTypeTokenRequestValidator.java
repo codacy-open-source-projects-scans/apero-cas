@@ -15,7 +15,6 @@ import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
 import com.nimbusds.jwt.proc.JWTClaimsSetVerifier;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
-import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.pac4j.core.context.WebContext;
 import org.pac4j.core.profile.ProfileManager;
@@ -33,7 +32,7 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
     private static final Set<String> JWT_TOKEN_TYPE_REQUIRED_CLAIMS = Set.of("iss", "aud", "sub", "exp", "iat", "nbf");
     private final JWTClaimsSetVerifier jwtClaimsSetVerifier;
 
-    public OAuth20TokenExchangeGrantTypeTokenRequestValidator(final ObjectProvider<@NonNull T> configurationContext) {
+    public OAuth20TokenExchangeGrantTypeTokenRequestValidator(final ObjectProvider<T> configurationContext) {
         super(configurationContext);
         jwtClaimsSetVerifier = new DefaultJWTClaimsVerifier<>(null, JWT_TOKEN_TYPE_REQUIRED_CLAIMS);
     }
@@ -50,15 +49,30 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
         val requestedTokenType = requestParameterResolver.resolveRequestParameter(webContext, OAuth20Constants.REQUESTED_TOKEN_TYPE)
             .orElseGet(OAuth20TokenExchangeTypes.ACCESS_TOKEN::getType);
 
-        val registeredService = extractRegisteredService(subjectTokenType, subjectToken);
+        val subjectRegisteredService = Objects.requireNonNull(extractRegisteredService(subjectTokenType, subjectToken));
 
-        val audit = AuditableContext.builder().registeredService(registeredService).build();
+        val audit = AuditableContext.builder().registeredService(subjectRegisteredService).build();
         val accessResult = configurationContext.getRegisteredServiceAccessStrategyEnforcer().execute(audit);
         accessResult.throwExceptionIfNeeded();
 
+        val authenticatedClientId = Objects.requireNonNullElse(
+            OAuth20Utils.getClientIdFromAuthenticatedProfile(uProfile), uProfile.getId());
+        val requestingClientId = requestParameterResolver.resolveRequestParameter(webContext, OAuth20Constants.CLIENT_ID)
+            .orElse(authenticatedClientId);
+        if (!Objects.equals(authenticatedClientId, requestingClientId)) {
+            LOGGER.warn("Authenticated client [{}] cannot request a token exchange for client [{}]",
+                authenticatedClientId, requestingClientId);
+            return false;
+        }
+
+        val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(
+            configurationContext.getServicesManager(), authenticatedClientId);
+        val requesterAudit = AuditableContext.builder().registeredService(registeredService).build();
+        configurationContext.getRegisteredServiceAccessStrategyEnforcer().execute(requesterAudit).throwExceptionIfNeeded();
+
         if (!isGrantTypeSupportedBy(registeredService, getGrantType().getType(), true)) {
             LOGGER.warn("Requested grant type [{}] is not authorized by service definition [{}]",
-                grantType, Objects.requireNonNull(registeredService).getServiceId());
+                grantType, registeredService.getServiceId());
             return false;
         }
 
@@ -86,7 +100,7 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
             case JWT -> {
                 val claimSet = configurationContext.getAccessTokenJwtBuilder().unpack(Optional.empty(), subjectToken);
                 jwtClaimsSetVerifier.verify(claimSet, new SimpleSecurityContext());
-                val service = configurationContext.getWebApplicationServiceServiceFactory().createService(claimSet.getIssuer());
+                val service = Objects.requireNonNull(configurationContext.getWebApplicationServiceServiceFactory().createService(claimSet.getIssuer()));
                 service.getAttributes().put(OAuth20Constants.CLIENT_ID, List.of(claimSet.getSubject()));
                 yield OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), claimSet.getSubject());
             }

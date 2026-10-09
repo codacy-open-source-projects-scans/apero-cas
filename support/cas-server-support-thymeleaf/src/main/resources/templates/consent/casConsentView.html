@@ -29,13 +29,14 @@
 <body>
 <main class="container mt-3 mb-3">
     <div id="content" layout:fragment="content">
-        <h2 th:text="#{screen.consent.title}" class="text-center">Attribute Consent</h2>
+        <h2 th:text="#{screen.consent.title}" class="text-center mb-2">Attribute Consent</h2>
 
         <div id="consent-tabs" class="mdc-tab-bar" role="tablist">
             <div class="mdc-tab-scroller">
                 <div class="mdc-tab-scroller__scroll-area">
                     <div class="mdc-tab-scroller__scroll-content">
-                        <button id="attributsButton" class="mdc-tab" role="tab" aria-selected="true">
+                        <button id="attributsButton" type="button" class="mdc-tab" role="tab"
+                                aria-selected="true" aria-controls="consent-tab-0">
                             <span class="mdc-tab__content">
                                 <span class="mdc-tab__text-label" th:text="#{screen.consent.attributes}">Attributes</span>
                             </span>
@@ -44,7 +45,8 @@
                             </span>
                             <span class="mdc-tab__ripple"></span>
                         </button>
-                        <button id="optionsButton" class="mdc-tab" role="tab" aria-selected="true">
+                        <button id="optionsButton" type="button" class="mdc-tab" role="tab"
+                                aria-selected="false" aria-controls="consent-tab-1">
                             <span class="mdc-tab__content">
                                 <span class="mdc-tab__text-label" th:text="#{screen.consent.options}">Options</span>
                             </span>
@@ -57,12 +59,15 @@
                 </div>
             </div>
         </div>
-        <form method="post" id="fm1" th:action="@{/login}" class="mdc-card card p-4 m-auto d-block mb-4">
+        <form method="post"
+              id="fm1"
+              th:action="@{${(tenantPath ?: '') + '/login'}}"
+              class="mdc-card card p-4 m-auto d-block mb-4">
+            
             <section id="consent-tab-0" class="consent-tab">
-                <div class="" id="attributesPanel" role="tabpanel" aria-labelledby="attributes-tab">
+                <div class="" id="attributesPanel" role="tabpanel" aria-labelledby="attributsButton">
                     <p id="appTitle" th:utext="#{screen.consent.attributes.header(${service.id})}">
                         The following attributes will be released to application</p>
-
 
                     <div class="w-100 mdc-data-table table-responsive mx-auto my-4" id="divAttributes">
                         <table id="attributesTable" class="table table-striped auto-init">
@@ -77,9 +82,9 @@
                             <tbody class="mdc-data-table__content">
                                 <tr th:each="attribute : ${attributes}" class="mdc-data-table__row">
                                     <td class="mdc-data-table__cell">
-                                        <code th:id="${attribute.name}">
-                                            <span th:if="${attribute.friendlyName}" th:utext="${attribute.friendlyName}"/>
-                                            <span th:unless="${attribute.friendlyName}" th:utext="${attribute.name}"/>
+                                        <code th:id="${attribute.name}"
+                                              th:with="label=${attribute.friendlyName ?: attribute.name},key=${'screen.consent.attributes.attribute.' + label},translated=${#messages.msgOrNull(key)}">
+                                            <span th:text="${!#strings.isEmpty(translated) && translated != key ? translated : label}"></span>
                                         </code>
                                     </td>
                                     <td class="mdc-data-table__cell">
@@ -92,7 +97,7 @@
                 </div>
             </section>
 
-            <section id="consent-tab-1" class="d-none consent-tab">
+            <section id="consent-tab-1" class="d-none consent-tab" role="tabpanel" aria-labelledby="optionsButton">
                 <div class="mb-4">
                     <h3 class="bg-primary p-2 mdc-typography mdc-typography--headline6 mb-2"
                         th:text="#{screen.consent.options.header}">
@@ -203,7 +208,8 @@
                             </label>
 
                         </div>
-                        <select name="reminderTimeUnit" id="reminderTimeUnit" class="custom-select">
+                        <select name="reminderTimeUnit" id="reminderTimeUnit" class="custom-select"
+                                aria-label="Reminder time unit">
                             <option value="seconds" th:selected="${#strings.toLowerCase(reminderTimeUnit)  == 'seconds'}"
                                     th:text="#{screen.consent.options.timeunit.seconds}">Seconds
                             </option>
@@ -242,7 +248,8 @@
             <hr class="my-4"/>
             <section class="cas-section form-actions mt-4 d-flex justify-content-center">
                 <div th:replace="~{fragments/submitbutton :: submitButton (messageKey='screen.consent.confirm', id='confirm', name='confirm')}"/>
-                <a class="mdc-button mdc-button--raised btn btn-outline-secondary button-cancel" id="cancel" name="cancel" th:href="@{/login}">
+                <a class="mdc-button mdc-button--raised btn btn-outline-secondary button-cancel"
+                   id="cancel" name="cancel" th:href="@{${(tenantPath ?: '') + '/login'}}">
                     <span class="mdc-button__label" th:text="#{screen.consent.cancel}">Cancel</span>
                 </a>
             </section>

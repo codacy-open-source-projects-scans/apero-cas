@@ -14,6 +14,7 @@ import org.apereo.cas.util.function.FunctionUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.apache.commons.lang3.StringUtils;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -25,8 +26,8 @@ import org.jspecify.annotations.Nullable;
 @RequiredArgsConstructor
 @Slf4j
 public class OidcVerifiableCredentialDefaultTransactionService implements OidcVerifiableCredentialTransactionService {
-    private static final int PRE_AUTHORIZED_CODE_LENGTH = 12;
-    
+    private static final int TRANSACTION_CODE_LENGTH = 12;
+
     private final OidcConfigurationContext configurationContext;
 
     @Override
@@ -35,16 +36,34 @@ public class OidcVerifiableCredentialDefaultTransactionService implements OidcVe
             clientId, OidcRegisteredService.class);
         RegisteredServiceAccessStrategyUtils.ensureServiceAccessIsAllowed(registeredService);
         val transientFactory = (TransientSessionTicketFactory) configurationContext.getTicketFactory().get(TransientSessionTicket.class);
+
+        val transactionCodeEnabled = configurationContext.getCasProperties()
+            .getAuthn().getOidc().getVc().getOffer().isTransactionCodeEnabled();
+        val transactionCode = transactionCodeEnabled
+            ? RandomUtils.randomAlphanumeric(TRANSACTION_CODE_LENGTH)
+            : null;
+
+        val codeProperties = new LinkedHashMap<>();
+        codeProperties.put("principalId", principalId);
+        codeProperties.put(OAuth20Constants.CLIENT_ID, clientId);
+        codeProperties.put(PROPERTY_CREDENTIAL_CONFIGURATION_IDS, credentialConfigurationIds);
+        FunctionUtils.doIfNotNull(transactionCode, _ -> codeProperties.put(PROPERTY_TRANSACTION_CODE, transactionCode));
+
         val properties = new LinkedHashMap<>();
         properties.put("issuerState", UUID.randomUUID().toString());
         properties.put("principalId", principalId);
         properties.put(OAuth20Constants.CLIENT_ID, clientId);
-        properties.put("credentialConfigurationIds", credentialConfigurationIds);
-        properties.put("preAuthorizedCode", RandomUtils.randomNumeric(PRE_AUTHORIZED_CODE_LENGTH));
-        
+        properties.put(PROPERTY_CREDENTIAL_CONFIGURATION_IDS, credentialConfigurationIds);
+        FunctionUtils.doIfNotNull(transactionCode, _ -> properties.put(PROPERTY_TRANSACTION_CODE, transactionCode));
+
         return FunctionUtils.doUnchecked(() -> {
-            val ticket = transientFactory.create(properties);
-            return configurationContext.getTicketRegistry().addTicket(ticket);
+            val preAuthorizationCode = transientFactory.create(codeProperties);
+            val transaction = transientFactory.create(properties);
+
+            preAuthorizationCode.putProperty("transactionId", transaction.getId());
+            val storedPreAuthorizationCode = configurationContext.getTicketRegistry().addTicket(preAuthorizationCode);
+            transaction.putProperty("preAuthorizedCode", storedPreAuthorizationCode.getId());
+            return configurationContext.getTicketRegistry().addTicket(transaction);
         });
     }
 
@@ -52,5 +71,35 @@ public class OidcVerifiableCredentialDefaultTransactionService implements OidcVe
     public @Nullable Ticket fetch(final String transactionId) {
         val ticket = (TransientSessionTicket) configurationContext.getTicketRegistry().getTicket(transactionId);
         return ticket != null && !ticket.isExpired() ? ticket : null;
+    }
+
+    @Override
+    public @Nullable Ticket fetchPreAuthorizationCode(final String preAuthorizationCode) {
+        val ticket = (TransientSessionTicket) configurationContext.getTicketRegistry().getTicket(preAuthorizationCode);
+        return ticket != null && !ticket.isExpired() ? ticket : null;
+    }
+
+    @Override
+    public @Nullable Ticket consumePreAuthorizationCode(final String preAuthorizationCode) {
+        return FunctionUtils.doAndHandle(() -> {
+            val ticket = (TransientSessionTicket) configurationContext.getTicketRegistry().getTicket(preAuthorizationCode);
+            if (ticket == null || ticket.isExpired()) {
+                LOGGER.debug("Pre-authorized code [{}] is unknown or has expired", preAuthorizationCode);
+                return null;
+            }
+            if (ticket.isStateless()) {
+                LOGGER.debug("Pre-authorized code [{}] is stateless and stays redeemable until it expires", preAuthorizationCode);
+                return ticket;
+            }
+            if (configurationContext.getTicketRegistry().deleteTicket(ticket) == 0) {
+                LOGGER.debug("Pre-authorized code [{}] was redeemed", preAuthorizationCode);
+                return null;
+            }
+            val transactionId = ticket.getPropertyAsString("transactionId");
+            if (StringUtils.isNotBlank(transactionId)) {
+                configurationContext.getTicketRegistry().deleteTicket(transactionId);
+            }
+            return ticket;
+        });
     }
 }

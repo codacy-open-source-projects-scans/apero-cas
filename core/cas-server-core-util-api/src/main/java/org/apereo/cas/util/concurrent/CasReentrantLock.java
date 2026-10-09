@@ -4,6 +4,7 @@ import module java.base;
 import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.jooq.lambda.fi.lang.CheckedRunnable;
 import org.jooq.lambda.fi.util.function.CheckedConsumer;
 import org.jooq.lambda.fi.util.function.CheckedSupplier;
 
@@ -24,9 +25,59 @@ import org.jooq.lambda.fi.util.function.CheckedSupplier;
  */
 @Slf4j
 public class CasReentrantLock {
-    private static final int LOCK_TIMEOUT_SECONDS = 3;
+    private static final int LOCK_TIMEOUT_SECONDS = 5;
 
     private final ReentrantLock lock = new ReentrantLock();
+
+    /**
+     * Acquire the lock without a timeout, execute the supplier and release the lock.
+     *
+     * @param supplier the supplier
+     * @param <T> the result type
+     * @return the supplied result
+     */
+    public <T> T execute(final Supplier<T> supplier) {
+        lock.lock();
+        try {
+            return supplier.get();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Acquire the lock without a timeout, execute the action and release the lock.
+     *
+     * @param action the action
+     */
+    public void execute(final Runnable action) {
+        execute(() -> {
+            action.run();
+            return null;
+        });
+    }
+
+    /**
+     * Acquire the lock without a timeout, execute the supplier and release the lock.
+     * Unlike {@link #tryLock(CheckedSupplier)}, this method waits for the lock to
+     * become available and so never reports a result of {@code null} to indicate
+     * that the lock could not be acquired in time.
+     *
+     * @param <T>      the type parameter
+     * @param supplier the supplier
+     * @return the supplied result
+     */
+    public <T> T executeAndThrow(final CheckedSupplier<T> supplier) {
+        lock.lock();
+        try {
+            return supplier.get();
+        } catch (final Throwable e) {
+            LoggingUtils.error(LOGGER, e);
+            throw new RuntimeException(e);
+        } finally {
+            lock.unlock();
+        }
+    }
 
     /**
      * Acquires the lock if it is not held by another thread within the given
@@ -39,6 +90,7 @@ public class CasReentrantLock {
         return FunctionUtils.doAndHandle(
             () -> lock.tryLock(LOCK_TIMEOUT_SECONDS, TimeUnit.SECONDS),
             e -> {
+                LoggingUtils.error(LOGGER, e);
                 Thread.currentThread().interrupt();
                 return false;
             }).get();
@@ -79,6 +131,27 @@ public class CasReentrantLock {
         if (tryLock()) {
             try {
                 consumer.accept(null);
+            } catch (final Throwable e) {
+                LoggingUtils.error(LOGGER, e);
+                throw new RuntimeException(e);
+            } finally {
+                unlock();
+            }
+        }
+    }
+
+    /**
+     * Acquires the lock if it is not held by another thread within the given
+     * waiting time and the current thread has not been
+     * {@linkplain Thread#interrupt interrupted}. Then, execute the given runnable.
+     *
+     * @param <T>      the type parameter
+     * @param consumer the consumer
+     */
+    public <T> void tryLock(final CheckedRunnable consumer) {
+        if (tryLock()) {
+            try {
+                consumer.run();
             } catch (final Throwable e) {
                 LoggingUtils.error(LOGGER, e);
                 throw new RuntimeException(e);

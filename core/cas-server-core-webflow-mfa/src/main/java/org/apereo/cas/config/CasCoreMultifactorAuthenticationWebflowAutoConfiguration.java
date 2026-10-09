@@ -62,7 +62,6 @@ import org.apereo.cas.web.support.CookieUtils;
 import org.apereo.cas.web.support.gen.CookieRetrievingCookieGenerator;
 import org.apereo.cas.web.support.mgmr.NoOpCookieValueManager;
 import lombok.val;
-import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -73,7 +72,6 @@ import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.ScopedProxyMode;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.webflow.definition.registry.FlowDefinitionRegistry;
@@ -98,7 +96,6 @@ public class CasCoreMultifactorAuthenticationWebflowAutoConfiguration {
         @ConditionalOnMissingBean(name = "rankedAuthenticationProviderWebflowEventResolver")
         @Bean
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
-        @Lazy(false)
         public CasDelegatingWebflowEventResolver rankedAuthenticationProviderWebflowEventResolver(
             @Qualifier(CasDelegatingWebflowEventResolver.BEAN_NAME_INITIAL_AUTHENTICATION_EVENT_RESOLVER)
             final CasDelegatingWebflowEventResolver initialAuthenticationAttemptWebflowEventResolver,
@@ -331,7 +328,7 @@ public class CasCoreMultifactorAuthenticationWebflowAutoConfiguration {
         @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
         public MultifactorAuthenticationTrigger adaptiveMultifactorAuthenticationTrigger(
             @Qualifier(GeoLocationService.BEAN_NAME)
-            final ObjectProvider<@NonNull GeoLocationService> geoLocationService,
+            final ObjectProvider<GeoLocationService> geoLocationService,
             final ConfigurableApplicationContext applicationContext,
             final CasConfigurationProperties casProperties) {
             return new AdaptiveMultifactorAuthenticationTrigger(geoLocationService.getIfAvailable(), casProperties, applicationContext);
@@ -513,7 +510,7 @@ public class CasCoreMultifactorAuthenticationWebflowAutoConfiguration {
             @Qualifier("restEndpointAuthenticationPolicyWebflowEventResolver")
             final CasWebflowEventResolver restEndpointAuthenticationPolicyWebflowEventResolver,
             @Qualifier("groovyScriptAuthenticationPolicyWebflowEventResolver")
-            final ObjectProvider<@NonNull CasWebflowEventResolver> groovyScriptAuthenticationPolicyWebflowEventResolver,
+            final ObjectProvider<CasWebflowEventResolver> groovyScriptAuthenticationPolicyWebflowEventResolver,
             @Qualifier("scriptedRegisteredServiceAuthenticationPolicyWebflowEventResolver")
             final CasWebflowEventResolver scriptedRegisteredServiceAuthenticationPolicyWebflowEventResolver,
             @Qualifier("registeredServicePrincipalAttributeAuthenticationPolicyWebflowEventResolver")

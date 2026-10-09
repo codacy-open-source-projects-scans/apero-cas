@@ -16,10 +16,18 @@ printgreen "Running Apache Syncope docker container..."
 COMPOSE_FILE=./ci/tests/syncope/docker-compose.yml
 test -f $COMPOSE_FILE || COMPOSE_FILE=docker-compose.yml
 docker compose -f $COMPOSE_FILE down >/dev/null 2>/dev/null || true
-docker compose -f $COMPOSE_FILE up -d
+docker compose -f $COMPOSE_FILE up --quiet-pull -d
 docker logs syncope-syncope-1 -f &
 printgreen "Waiting for Apache Syncope server to come online...\n"
-sleep 35
+syncopeWaitStart=${SECONDS}
+until docker logs syncope-syncope-1 2>&1 | grep -q "Started SyncopeCoreApplication"; do
+  if (( SECONDS - syncopeWaitStart > 300 )); then
+    printred "Apache Syncope did not finish starting within 300 seconds"
+    exit 1
+  fi
+  printf '.'
+  sleep 2
+done
 until $(curl --output /dev/null --silent --head --fail http://localhost:18080/syncope/); do
     printf '.'
     sleep 1
@@ -383,10 +391,8 @@ for i in {0..4}; do
       "operation": "ADD_REPLACE",
       "value": "suspended",
       "onSyncope": true,
-      "resources": [],
       "key": "'"${SYNCOPESUSPEND_KEY}"'",
-      "type": "SUSPEND",
-      "token": null
+      "type": "SUSPEND"
     }'
 done
 

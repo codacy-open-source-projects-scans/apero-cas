@@ -28,11 +28,15 @@ import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
  * This is {@link WebAuthnControllerTests}.
@@ -78,21 +82,31 @@ class WebAuthnControllerTests {
     @Test
     void verifyFinishAuthentication() throws Throwable {
         val sessionManager = mock(SessionManager.class);
-        val authn = RegisteredServiceTestUtils.getAuthentication();
 
         val server = mock(WebAuthnServer.class);
         when(server.getSessionManager()).thenReturn(sessionManager);
-        val controller = new WebAuthnController(server);
-        val request = new MockHttpServletRequest();
+        val mockMvc = MockMvcBuilders.standaloneSetup(new WebAuthnController(server)).build();
+        val finishRequest = post("/webauthn/authenticate/finish")
+            .contentType(MediaType.APPLICATION_JSON)
+            .accept(MediaType.APPLICATION_JSON)
+            .content("{}");
 
-        when(server.finishAuthentication(any(), any())).thenReturn(Either.left(List.of("fails")));
-        var result = controller.finishAuthentication(request, "casuser");
-        assertEquals(HttpStatus.BAD_REQUEST, result.getStatusCode());
+        when(server.finishAuthentication(any(), any()))
+            .thenReturn(Either.left(new WebAuthnServer.AuthenticationFailure(List.of("fails"), true)));
+        mockMvc.perform(finishRequest)
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.messages[0]").value("fails"))
+            .andExpect(jsonPath("$.unknownCredential").value(true));
+
+        when(server.finishAuthentication(any(), any())).thenReturn(Either.left(WebAuthnServer.AuthenticationFailure.of("fails")));
+        mockMvc.perform(finishRequest)
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.unknownCredential").value(false));
 
         val registration = CredentialRegistration.builder()
             .registrationTime(Instant.now(Clock.systemUTC()))
             .credential(RegisteredCredential.builder()
-                .credentialId(ByteArray.fromBase64Url(authn.getPrincipal().getId()))
+                .credentialId(ByteArray.fromBase64Url("ibE9wQddsF806g8uL9hDzgwLJipKhS9esD07Jmj0N98"))
                 .userHandle(ByteArray.fromBase64Url(RandomUtils.randomAlphabetic(8)))
                 .publicKeyCose(ByteArray.fromBase64Url(RandomUtils.randomAlphabetic(8)))
                 .build())
@@ -101,6 +115,7 @@ class WebAuthnControllerTests {
                 .displayName("CAS")
                 .id(ByteArray.fromBase64Url(RandomUtils.randomAlphabetic(8)))
                 .build())
+            .aaguid("ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4")
             .build();
 
         val publicKeyRequest = PublicKeyCredentialRequestOptions.builder()
@@ -136,14 +151,31 @@ class WebAuthnControllerTests {
 
         when(sessionManager.getSession(any(), any())).thenReturn(Optional.of(sessionToken));
         when(server.finishAuthentication(any(), any())).thenReturn(Either.right(authnResult));
-        result = controller.finishAuthentication(request, "casuser");
-        assertEquals(HttpStatus.OK, result.getStatusCode());
+        mockMvc.perform(finishRequest)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true))
+            .andExpect(jsonPath("$.username").value("casuser"))
+            .andExpect(jsonPath("$.passkeyProvider.name").value("Google Password Manager"));
+    }
+
+    @Test
+    void verifyPasskeyProviderIcon() throws Throwable {
+        val mockMvc = MockMvcBuilders.standaloneSetup(new WebAuthnController(mock(WebAuthnServer.class))).build();
+        mockMvc.perform(get("/webauthn/passkey-providers/ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4/icon"))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith("image/svg+xml"))
+            .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+            .andExpect(header().string("Content-Security-Policy", containsString("sandbox")))
+            .andExpect(content().string(containsString("<svg")));
+        mockMvc.perform(get("/webauthn/passkey-providers/" + UUID.randomUUID() + "/icon"))
+            .andExpect(status().isNotFound());
     }
 
     @Test
     void verifyStartRegistration() throws Throwable {
         val server = mock(WebAuthnServer.class);
-        val controller = new WebAuthnController(server);
+        when(server.determineResidentKeyRequirement(false)).thenReturn(ResidentKeyRequirement.PREFERRED);
+        val mockMvc = MockMvcBuilders.standaloneSetup(new WebAuthnController(server)).build();
 
         val publicKeyCredential = PublicKeyCredentialCreationOptions.builder()
             .rp(new RelyingPartyIdentity.RelyingPartyIdentityBuilder.MandatoryStages()
@@ -165,19 +197,31 @@ class WebAuthnControllerTests {
         when(server.startRegistration(any(), anyString(), any(), any(), any(ResidentKeyRequirement.class), any()))
             .thenReturn(Either.right(registrationRequest));
 
-        val request = new MockHttpServletRequest();
-        val response = new MockHttpServletResponse();
+        val registerRequest = post("/webauthn/register")
+            .principal(new TestingAuthenticationToken("casuser", List.of()))
+            .accept(MediaType.APPLICATION_JSON)
+            .param("displayName", "displayName")
+            .param("credentialNickname", "nickName")
+            .param("requireResidentKey", "false")
+            .param("sessionToken", "sessionToken");
+        mockMvc.perform(registerRequest)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true));
+        verify(server).startRegistration(any(), eq("casuser"), any(), any(), eq(ResidentKeyRequirement.PREFERRED), any());
 
-        val authenticatedPrincipal = new TestingAuthenticationToken("casuser", List.of());
-        var result = controller.startRegistration("displayName",
-            "nickName", false, "sessionToken",
-            authenticatedPrincipal, request, response);
-        assertEquals(HttpStatus.OK, result.getStatusCode());
+        when(server.startConditionalRegistration(any(), anyString(), any(), any())).thenReturn(Either.right(registrationRequest));
+        mockMvc.perform(post("/webauthn/register")
+                .principal(new TestingAuthenticationToken("casuser", List.of()))
+                .accept(MediaType.APPLICATION_JSON)
+                .param("displayName", "displayName")
+                .param("conditional", "true")
+                .param("username", "CasUser@example.org"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true));
+        verify(server).startConditionalRegistration(any(), eq("casuser"), eq(Optional.of("CasUser@example.org")), eq(Optional.of("displayName")));
 
         when(server.startRegistration(any(), anyString(), any(), any(), any(ResidentKeyRequirement.class), any())).thenReturn(Either.left("failed"));
-        result = controller.startRegistration("displayName", "nickName", false,
-            "sessionToken", authenticatedPrincipal, request, response);
-        assertEquals(HttpStatus.BAD_REQUEST, result.getStatusCode());
+        mockMvc.perform(registerRequest).andExpect(status().isBadRequest());
     }
 
     @Test

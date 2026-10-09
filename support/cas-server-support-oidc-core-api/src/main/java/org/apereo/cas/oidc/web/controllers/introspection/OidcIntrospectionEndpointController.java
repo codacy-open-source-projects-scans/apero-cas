@@ -21,7 +21,6 @@ import lombok.val;
 import org.apache.commons.lang3.Strings;
 import org.jose4j.jwt.JwtClaims;
 import org.jose4j.jwt.NumericDate;
-import org.jspecify.annotations.NonNull;
 import org.pac4j.core.context.WebContext;
 import org.pac4j.jee.context.JEEContext;
 import org.springframework.http.HttpHeaders;
@@ -88,18 +87,22 @@ public class OidcIntrospectionEndpointController extends OAuth20IntrospectionEnd
     @Operation(summary = "Handle OIDC introspection request")
     @Override
     public ResponseEntity handlePostRequest(final HttpServletRequest request, final HttpServletResponse response) throws Throwable {
+        val webContext = new JEEContext(request, response);
+        if (!getConfigurationContext().getIssuerService().validateIssuer(webContext, List.of(OidcConstants.INTROSPECTION_URL))) {
+            val body = OAuth20Utils.getErrorResponseBody(OAuth20Constants.INVALID_REQUEST, "Invalid issuer");
+            return new ResponseEntity(body, HttpStatus.BAD_REQUEST);
+        }
         return super.handlePostRequest(request, response);
     }
     
     @Override
     protected ResponseEntity buildIntrospectionEntityResponse(final WebContext context,
-                                                              final OAuth20IntrospectionAccessTokenResponse introspect) {
-        val responseEntity = super.buildIntrospectionEntityResponse(context, introspect);
+                                                               final OAuth20IntrospectionAccessTokenResponse introspect,
+                                                               final OAuthRegisteredService registeredService) {
+        val responseEntity = super.buildIntrospectionEntityResponse(context, introspect, registeredService);
         return context.getRequestHeader(HttpHeaders.ACCEPT)
             .filter(headerValue -> Strings.CI.equalsAny(headerValue, OAuth20Constants.INTROSPECTION_JWT_HEADER_CONTENT_TYPE))
             .map(headerValue -> {
-                val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(
-                    getConfigurationContext().getServicesManager(), introspect.getClientId());
                 val signingAndEncryptionService = getConfigurationContext().getIntrospectionSigningAndEncryptionService();
                 return FunctionUtils.doAndHandle(() -> {
                     if (signingAndEncryptionService.shouldSignToken(registeredService) || signingAndEncryptionService.shouldEncryptToken(registeredService)) {
@@ -111,7 +114,7 @@ public class OidcIntrospectionEndpointController extends OAuth20IntrospectionEnd
             .orElse(responseEntity);
     }
 
-    protected ResponseEntity<@NonNull String> buildPlainIntrospectionClaims(final WebContext context,
+    protected ResponseEntity<String> buildPlainIntrospectionClaims(final WebContext context,
                                                                             final OAuth20IntrospectionAccessTokenResponse introspect,
                                                                             final OAuthRegisteredService registeredService) throws Exception {
         val claims = convertIntrospectionIntoClaims(introspect, registeredService);
@@ -132,7 +135,7 @@ public class OidcIntrospectionEndpointController extends OAuth20IntrospectionEnd
         return claims;
     }
 
-    protected ResponseEntity<@NonNull String> signAndEncryptIntrospection(final WebContext context,
+    protected ResponseEntity<String> signAndEncryptIntrospection(final WebContext context,
                                                                           final OAuth20IntrospectionAccessTokenResponse introspect,
                                                                           final OAuthRegisteredService registeredService) throws Throwable {
         val claims = convertIntrospectionIntoClaims(introspect, registeredService);
@@ -143,7 +146,7 @@ public class OidcIntrospectionEndpointController extends OAuth20IntrospectionEnd
         return buildResponseEntity(result, registeredService);
     }
 
-    private static ResponseEntity<@NonNull String> buildResponseEntity(final String result,
+    private static ResponseEntity<String> buildResponseEntity(final String result,
                                                                        final OAuthRegisteredService registeredService) {
         val context = CollectionUtils.<String, Object>wrap(
             HttpHeaders.CONTENT_TYPE, OAuth20Constants.INTROSPECTION_JWT_HEADER_CONTENT_TYPE,
