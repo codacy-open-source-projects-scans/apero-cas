@@ -47,9 +47,11 @@ import org.apereo.cas.support.oauth.profile.OAuth20UserProfileDataCreator;
 import org.apereo.cas.support.oauth.services.OAuth20RegisteredServiceCipherExecutor;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.validator.CASOAuth20TicketValidator;
+import org.apereo.cas.support.oauth.validator.DefaultOAuth20ClientSecretExpirationListener;
 import org.apereo.cas.support.oauth.validator.DefaultOAuth20ClientSecretValidator;
 import org.apereo.cas.support.oauth.validator.DefaultOAuth20DPoPNonceService;
 import org.apereo.cas.support.oauth.validator.DefaultOAuth20ProofOfPossessionValidator;
+import org.apereo.cas.support.oauth.validator.OAuth20ClientSecretExpirationListener;
 import org.apereo.cas.support.oauth.validator.OAuth20ClientSecretValidator;
 import org.apereo.cas.support.oauth.validator.OAuth20DPoPNonceService;
 import org.apereo.cas.support.oauth.validator.OAuth20ProofOfPossessionValidator;
@@ -207,6 +209,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.MessageSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.ScopedProxyMode;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.scheduling.TaskScheduler;
@@ -1064,6 +1067,18 @@ class CasOAuth20Configuration {
             }
 
             @Bean
+            @ConditionalOnMissingBean(name = OAuth20ClientSecretExpirationListener.BEAN_NAME)
+            @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
+            @Lazy(false)
+            public OAuth20ClientSecretExpirationListener oauth20ClientSecretExpirationListener(
+                @Qualifier(ServicesManager.BEAN_NAME)
+                final ServicesManager servicesManager,
+                @Qualifier(OAuth20ClientSecretValidator.BEAN_NAME)
+                final OAuth20ClientSecretValidator oauth20ClientSecretValidator) {
+                return new DefaultOAuth20ClientSecretExpirationListener(servicesManager, oauth20ClientSecretValidator);
+            }
+
+            @Bean
             @ConditionalOnMissingBean(name = "oauth20AuthorizationCodeGrantTypeProofKeyCodeExchangeTokenRequestValidator")
             @RefreshScope(proxyMode = ScopedProxyMode.DEFAULT)
             public OAuth20TokenRequestValidator oauth20AuthorizationCodeGrantTypeProofKeyCodeExchangeTokenRequestValidator(
@@ -1101,12 +1116,14 @@ class CasOAuth20Configuration {
                 @Qualifier(WebApplicationService.BEAN_NAME_FACTORY)
                 final ServiceFactory<WebApplicationService> webApplicationServiceFactory,
                 @Qualifier(ServicesManager.BEAN_NAME)
-                final ServicesManager servicesManager) {
+                final ServicesManager servicesManager,
+                @Qualifier("oauthProofOfPossessionValidator")
+                final OAuth20ProofOfPossessionValidator oauthProofOfPossessionValidator) {
                 val responseTypesSupported = casProperties.getAuthn().getOidc().getDiscovery().getResponseTypesSupported();
                 return BeanSupplier.of(OAuth20TokenRequestValidator.class)
                     .when(responseTypesSupported.contains(OAuth20ResponseTypes.DEVICE_CODE.getType()))
                     .supply(() -> new OAuth20DeviceCodeResponseTypeRequestValidator(servicesManager,
-                        webApplicationServiceFactory, oauthRequestParameterResolver))
+                        webApplicationServiceFactory, oauthRequestParameterResolver, oauthProofOfPossessionValidator))
                     .otherwiseProxy()
                     .get();
             }
@@ -1848,8 +1865,9 @@ class CasOAuth20Configuration {
                 final PrincipalFactory principalFactory,
                 @Qualifier(WebApplicationService.BEAN_NAME_FACTORY)
                 final ServiceFactory serviceFactory) {
-                return new OAuth20CodeCompactor(ticketFactory, serviceFactory, principalFactory,
-                    CompactTicketAuthentication.getRetainedAuthenticationAttributes(casProperties));
+                val retainedAttributes = new LinkedHashSet<>(CompactTicketAuthentication.getRetainedAuthenticationAttributes(casProperties));
+                retainedAttributes.add(OAuth20Constants.DPOP_JKT);
+                return new OAuth20CodeCompactor(ticketFactory, serviceFactory, principalFactory, retainedAttributes);
             }
 
             @Bean
@@ -1863,8 +1881,9 @@ class CasOAuth20Configuration {
                 final PrincipalFactory principalFactory,
                 @Qualifier(WebApplicationService.BEAN_NAME_FACTORY)
                 final ServiceFactory serviceFactory) {
-                return new OAuth20AccessTokenCompactor(ticketFactory, serviceFactory, principalFactory,
-                    CompactTicketAuthentication.getRetainedAuthenticationAttributes(casProperties));
+                val retainedAttributes = new LinkedHashSet<>(CompactTicketAuthentication.getRetainedAuthenticationAttributes(casProperties));
+                retainedAttributes.add(OAuth20Constants.DPOP_CONFIRMATION);
+                return new OAuth20AccessTokenCompactor(ticketFactory, serviceFactory, principalFactory, retainedAttributes);
             }
 
             @Bean
@@ -1878,8 +1897,9 @@ class CasOAuth20Configuration {
                 final PrincipalFactory principalFactory,
                 @Qualifier(WebApplicationService.BEAN_NAME_FACTORY)
                 final ServiceFactory serviceFactory) {
-                return new OAuth20RefreshTokenCompactor(ticketFactory, serviceFactory, principalFactory,
-                    CompactTicketAuthentication.getRetainedAuthenticationAttributes(casProperties));
+                val retainedAttributes = new LinkedHashSet<>(CompactTicketAuthentication.getRetainedAuthenticationAttributes(casProperties));
+                retainedAttributes.add(OAuth20Constants.DPOP_CONFIRMATION);
+                return new OAuth20RefreshTokenCompactor(ticketFactory, serviceFactory, principalFactory, retainedAttributes);
             }
 
             @Bean

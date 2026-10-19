@@ -5,7 +5,6 @@ import org.apereo.cas.authentication.principal.Principal;
 import org.apereo.cas.configuration.model.support.oidc.OidcVerifiableCredentialConfigurationProperties;
 import org.apereo.cas.configuration.support.Beans;
 import org.apereo.cas.oidc.OidcConfigurationContext;
-import org.apereo.cas.oidc.OidcConstants;
 import org.apereo.cas.oidc.vc.issuer.OidcVerifiableCredentialValidationContext;
 import org.apereo.cas.oidc.vc.issuer.proof.OidcVerifiableCredentialProofValidator;
 import org.apereo.cas.services.OidcRegisteredService;
@@ -116,7 +115,8 @@ public abstract class BaseOidcVerifiableCredentialEncoder implements OidcVerifia
     protected String sign(
         final String sub, final OidcVerifiableCredentialValidationContext context,
         final OidcVerifiableCredentialProofValidator.VerifiableCredentialProofResult proof,
-        final CheckedConsumer<JwtClaims> claimsConsumer) throws Throwable {
+        final CheckedConsumer<JwtClaims> claimsConsumer)
+            throws Throwable {
         val oidc = configurationContext.getCasProperties().getAuthn().getOidc();
         val configurationId = context.resolveConfigurationId();
 
@@ -133,7 +133,6 @@ public abstract class BaseOidcVerifiableCredentialEncoder implements OidcVerifia
 
         val issuer = oidc.getCore().getIssuer();
         jwtClaims.setIssuer(issuer);
-        jwtClaims.setClaim("vct", issuer + '/' + OidcConstants.VC_CREDENTIAL_TYPE_URL + '/' + configurationId);
         jwtClaims.setClaim("cnf", Map.of("jwk", proof.holderJwk().toJSONObject()));
         
         val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(
@@ -163,7 +162,8 @@ public abstract class BaseOidcVerifiableCredentialEncoder implements OidcVerifia
      * @throws Throwable the throwable
      */
     protected String signCredential(final JwtClaims claims, final String configurationId,
-                                    final OidcRegisteredService registeredService) throws Throwable {
+                                    final OidcRegisteredService registeredService)
+            throws Throwable {
         val configuration = resolveConfiguration(configurationId);
         val signingKey = configurationContext.getIdTokenSigningAndEncryptionService()
             .getJsonWebKeySigningKey(Optional.of(registeredService));

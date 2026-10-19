@@ -6,6 +6,7 @@ import org.apereo.cas.authentication.principal.WebApplicationService;
 import org.apereo.cas.configuration.CasConfigurationProperties;
 import org.apereo.cas.services.RegisteredServiceAccessStrategyUtils;
 import org.apereo.cas.services.ServicesManager;
+import org.apereo.cas.token.cipher.JwtTicketCipherExecutor;
 import org.apereo.cas.token.cipher.RegisteredServiceJwtTicketCipherExecutor;
 import org.apereo.cas.util.crypto.CipherExecutor;
 import org.apereo.cas.web.BaseCasActuatorEndpoint;
@@ -55,7 +56,8 @@ public class JwtTokenCipherSigningPublicKeyEndpoint extends BaseCasActuatorEndpo
     @Operation(summary = "Get public key for signing operations", parameters = @Parameter(name = "service", required = false, description = "The service to look up"))
     public String fetchPublicKey(
         @Nullable
-        final String service) throws Exception {
+        final String service)
+            throws Exception {
         var signingKey = tokenCipherExecutor.getSigningKey();
 
         if (StringUtils.isNotBlank(service)) {
@@ -63,11 +65,10 @@ public class JwtTokenCipherSigningPublicKeyEndpoint extends BaseCasActuatorEndpo
             val registeredService = servicesManager.findServiceBy(webApplicationService);
             RegisteredServiceAccessStrategyUtils.ensureServiceAccessIsAllowed(webApplicationService, registeredService);
             val serviceCipher = new RegisteredServiceJwtTicketCipherExecutor();
-            if (serviceCipher.supports(Objects.requireNonNull(registeredService))) {
-                val cipher = serviceCipher.getTokenTicketCipherExecutorForService(registeredService);
-                if (cipher.isEnabled()) {
-                    signingKey = cipher.getSigningKey();
-                }
+            final Optional<JwtTicketCipherExecutor> cipher =
+                serviceCipher.findTokenTicketCipherExecutorForService(Objects.requireNonNull(registeredService));
+            if (cipher.isPresent() && cipher.get().isEnabled()) {
+                signingKey = cipher.get().getSigningKey();
             }
         }
 

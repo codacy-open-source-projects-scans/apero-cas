@@ -692,6 +692,39 @@ public abstract class BaseTicketRegistryTests {
     }
 
     @RepeatedTest(2)
+    void verifyDeleteTicketWithConsumedServiceTicket() throws Throwable {
+        assumeTrue(canTicketRegistryDelete());
+        val ticketGrantingTicketId = TestTicketIdentifiers.generate().ticketGrantingTicketId();
+        val addedTicket = ticketRegistry.addTicket(new TicketGrantingTicketImpl(ticketGrantingTicketId,
+            CoreAuthenticationTestUtils.getAuthentication(), NeverExpiresExpirationPolicy.INSTANCE));
+        val tgt = ticketRegistry.getTicket(addedTicket.getId(), TicketGrantingTicket.class);
+        val service = RegisteredServiceTestUtils.getService("TGT_DELETE_CONSUMED_TEST");
+        val consumed = tgt.grantServiceTicket(TestTicketIdentifiers.generate().serviceTicketId(), service,
+            NeverExpiresExpirationPolicy.INSTANCE, false, serviceTicketSessionTrackingPolicy);
+        val remaining = tgt.grantServiceTicket(TestTicketIdentifiers.generate().serviceTicketId(), service,
+            NeverExpiresExpirationPolicy.INSTANCE, false, serviceTicketSessionTrackingPolicy);
+        ticketRegistry.addTicket(consumed);
+        ticketRegistry.addTicket(remaining);
+        ticketRegistry.updateTicket(tgt);
+        assertEquals(1, ticketRegistry.deleteTicket(consumed.getId()));
+
+        assertTrue(ticketRegistry.deleteTicket(tgt.getId()) >= 2);
+        assertThrows(InvalidTicketException.class, () -> ticketRegistry.getTicket(ticketGrantingTicketId, TicketGrantingTicket.class));
+        assertThrows(InvalidTicketException.class, () -> ticketRegistry.getTicket(remaining.getId(), ServiceTicket.class));
+    }
+
+    @RepeatedTest(2)
+    void verifyTicketDeletedOnlyOnce() throws Throwable {
+        assumeTrue(canTicketRegistryDelete() && canTicketRegistryReportMissingTicketOnDelete());
+        val ticket = new TicketGrantingTicketImpl(TestTicketIdentifiers.generate().ticketGrantingTicketId(),
+            CoreAuthenticationTestUtils.getAuthentication(), NeverExpiresExpirationPolicy.INSTANCE);
+        ticketRegistry.addTicket(ticket);
+        val ticketFromRegistry = ticketRegistry.getTicket(ticket.getId(), TicketGrantingTicket.class);
+        assertEquals(1, ticketRegistry.deleteTicket(ticketFromRegistry));
+        assertEquals(0, ticketRegistry.deleteTicket(ticketFromRegistry));
+    }
+
+    @RepeatedTest(2)
     void verifyWriteGetDelete() throws Throwable {
         val ticketGrantingTicketId = TestTicketIdentifiers.generate().ticketGrantingTicketId();
         val ticket = new TicketGrantingTicketImpl(ticketGrantingTicketId,
@@ -818,6 +851,14 @@ public abstract class BaseTicketRegistryTests {
     }
 
     protected boolean canTicketRegistryDelete() {
+        return true;
+    }
+
+    /**
+     * Single-use tickets are consumed by whichever request's delete removes them, so the registry has to report
+     * a delete that found nothing.
+     */
+    protected boolean canTicketRegistryReportMissingTicketOnDelete() {
         return true;
     }
 

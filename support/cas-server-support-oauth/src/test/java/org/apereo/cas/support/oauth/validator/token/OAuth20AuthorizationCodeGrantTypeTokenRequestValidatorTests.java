@@ -13,16 +13,23 @@ import org.apereo.cas.support.oauth.authenticator.Authenticators;
 import org.apereo.cas.support.oauth.authenticator.OAuth20DefaultCasAuthenticationBuilder;
 import org.apereo.cas.support.oauth.profile.DefaultOAuth20ProfileScopeToAttributesFilter;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.ticket.ExpirationPolicy;
 import org.apereo.cas.ticket.ExpirationPolicyBuilder;
+import org.apereo.cas.ticket.TransientSessionTicketImpl;
 import org.apereo.cas.ticket.code.OAuth20Code;
 import org.apereo.cas.ticket.code.OAuth20CodeExpirationPolicy;
 import org.apereo.cas.ticket.code.OAuth20DefaultOAuthCodeFactory;
+import org.apereo.cas.ticket.expiration.NeverExpiresExpirationPolicy;
 import org.apereo.cas.ticket.tracking.TicketTrackingPolicy;
 import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.DefaultUniqueTicketIdGenerator;
+import org.apereo.cas.util.DigestUtils;
+import org.apereo.cas.util.EncodingUtils;
+import org.apereo.cas.util.RandomUtils;
 import org.apereo.cas.util.crypto.CipherExecutor;
 import lombok.val;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -76,7 +83,12 @@ class OAuth20AuthorizationCodeGrantTypeTokenRequestValidatorTests {
             assertNotNull(at1);
             val at2 = addAccessToken(principal, registeredService, code);
             assertNotNull(at2);
-            code.markTicketExpired();
+            val recordProperties = new HashMap<String, Serializable>();
+            recordProperties.put(OAuth20Utils.REDEEMED_CODE_TOKENS, new ArrayList<>(List.of(at1.getId(), at2.getId())));
+            val recordId = OAuth20Utils.getRedeemedCodeTicketId(code.getId());
+            ticketRegistry.addTicket(new TransientSessionTicketImpl(recordId, NeverExpiresExpirationPolicy.INSTANCE,
+                code.getService(), recordProperties));
+            ticketRegistry.deleteTicket(code);
 
             request.setParameter(OAuth20Constants.CODE, code.getId());
             profile.setId(registeredService.getClientId());
@@ -86,11 +98,14 @@ class OAuth20AuthorizationCodeGrantTypeTokenRequestValidatorTests {
             assertFalse(validator.validate(new JEEContext(request, response)));
             assertNull(ticketRegistry.getTicket(at1.getId()));
             assertNull(ticketRegistry.getTicket(at2.getId()));
+            assertNull(ticketRegistry.getTicket(recordId));
         }
     }
 
     @Nested
     class DefaultTests extends AbstractOAuth20Tests {
+        private OAuthRegisteredService supportingService;
+
         private OAuth20Code supportingServiceTicket;
 
         private OAuth20Code nonSupportingServiceTicket;
@@ -103,7 +118,7 @@ class OAuth20AuthorizationCodeGrantTypeTokenRequestValidatorTests {
 
         @BeforeEach
         void before() throws Throwable {
-            val supportingService = RequestValidatorTestUtils.getService(
+            supportingService = RequestValidatorTestUtils.getService(
                 RegisteredServiceTestUtils.CONST_TEST_URL,
                 SUPPORTING_CLIENT_ID,
                 SUPPORTING_CLIENT_ID,
@@ -255,7 +270,73 @@ class OAuth20AuthorizationCodeGrantTypeTokenRequestValidatorTests {
             assertTrue(validator.validate(new JEEContext(request, response)));
         }
 
+        @Test
+        void verifyCodeChallengeEnforcedForAnyClientAuthentication() throws Throwable {
+            val codeVerifier = RandomUtils.randomAlphanumeric(43);
+            val codeChallenge = EncodingUtils.encodeUrlSafeBase64(DigestUtils.rawDigestSha256(codeVerifier));
+            val code = registerTicket(supportingService, codeChallenge, "S256");
+
+            val request = new MockHttpServletRequest();
+            request.setMethod(HttpMethod.POST.name());
+            val response = new MockHttpServletResponse();
+            val profile = new CommonProfile();
+            profile.setClientName(Authenticators.CAS_OAUTH_CLIENT_X509_CERTIFICATE_AUTHN);
+            profile.setId(SUPPORTING_CLIENT_ID);
+            storeProfileIntoSession(request, profile);
+            request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.AUTHORIZATION_CODE.getType());
+            request.setParameter(OAuth20Constants.REDIRECT_URI, RegisteredServiceTestUtils.CONST_TEST_URL);
+            request.setParameter(OAuth20Constants.CODE, code.getId());
+            assertFalse(validator.validate(new JEEContext(request, response)));
+
+            request.setParameter(OAuth20Constants.CODE_VERIFIER, RandomUtils.randomAlphanumeric(43));
+            assertFalse(validator.validate(new JEEContext(request, response)));
+
+            request.setParameter(OAuth20Constants.CODE_VERIFIER, codeVerifier);
+            assertTrue(validator.validate(new JEEContext(request, response)));
+        }
+
+        @Test
+        void verifyCodeChallengeComparedExactly() throws Throwable {
+            val codeVerifier = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-._~AbC";
+            val code = registerTicket(supportingService, codeVerifier, "plain");
+
+            val request = new MockHttpServletRequest();
+            request.setMethod(HttpMethod.POST.name());
+            val response = new MockHttpServletResponse();
+            val profile = new CommonProfile();
+            profile.setClientName(Authenticators.CAS_OAUTH_CLIENT_BASIC_AUTHN);
+            profile.setId(SUPPORTING_CLIENT_ID);
+            storeProfileIntoSession(request, profile);
+            request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.AUTHORIZATION_CODE.getType());
+            request.setParameter(OAuth20Constants.REDIRECT_URI, RegisteredServiceTestUtils.CONST_TEST_URL);
+            request.setParameter(OAuth20Constants.CODE, code.getId());
+            request.setParameter(OAuth20Constants.CODE_VERIFIER, codeVerifier.toLowerCase(Locale.ENGLISH));
+            assertFalse(validator.validate(new JEEContext(request, response)));
+        }
+
+        @Test
+        void verifyCodeVerifierWithoutCodeChallenge() throws Throwable {
+            val request = new MockHttpServletRequest();
+            request.setMethod(HttpMethod.POST.name());
+            val response = new MockHttpServletResponse();
+            val profile = new CommonProfile();
+            profile.setClientName(Authenticators.CAS_OAUTH_CLIENT_X509_CERTIFICATE_AUTHN);
+            profile.setId(SUPPORTING_CLIENT_ID);
+            storeProfileIntoSession(request, profile);
+            request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.AUTHORIZATION_CODE.getType());
+            request.setParameter(OAuth20Constants.REDIRECT_URI, RegisteredServiceTestUtils.CONST_TEST_URL);
+            request.setParameter(OAuth20Constants.CODE, supportingServiceTicket.getId());
+            request.setParameter(OAuth20Constants.CODE_VERIFIER, RandomUtils.randomAlphanumeric(43));
+            assertFalse(validator.validate(new JEEContext(request, response)));
+        }
+
         private OAuth20Code registerTicket(final OAuthRegisteredService service) throws Throwable {
+            return registerTicket(service, null, null);
+        }
+
+        private OAuth20Code registerTicket(final OAuthRegisteredService service, @Nullable final String codeChallenge,
+                                           @Nullable final String codeChallengeMethod)
+                throws Throwable {
             val builder = new OAuth20DefaultCasAuthenticationBuilder(
                 PrincipalFactoryUtils.newPrincipalFactory(),
                 serviceFactory,
@@ -277,7 +358,7 @@ class OAuth20AuthorizationCodeGrantTypeTokenRequestValidatorTests {
                 mock(ServicesManager.class), CipherExecutor.noOpOfStringToString(), TicketTrackingPolicy.noOp())
                 .create(oauthCasAuthenticationBuilderService, RegisteredServiceTestUtils.getAuthentication(),
                     new MockTicketGrantingTicket("casuser"), new HashSet<>(),
-                    null, null, "clientid12345",
+                    codeChallenge, codeChallengeMethod, "clientid12345",
                     new HashMap<>(), OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
             this.ticketRegistry.addTicket(oauthCode);
             return oauthCode;

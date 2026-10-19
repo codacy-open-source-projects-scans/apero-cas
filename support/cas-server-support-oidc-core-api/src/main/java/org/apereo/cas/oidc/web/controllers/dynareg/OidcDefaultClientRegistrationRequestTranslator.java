@@ -54,7 +54,8 @@ public class OidcDefaultClientRegistrationRequestTranslator implements OidcClien
     @Override
     public OidcRegisteredService translate(
         final OidcClientRegistrationRequest registrationRequest,
-        final Optional<OidcRegisteredService> givenService) throws Exception {
+        final Optional<OidcRegisteredService> givenService)
+            throws Exception {
 
         val context = configurationContext.getObject();
 
@@ -98,6 +99,7 @@ public class OidcDefaultClientRegistrationRequestTranslator implements OidcClien
 
         FunctionUtils.doIfNotBlank(registrationRequest.getTokenEndpointAuthMethod(),
             _ -> registeredService.setTokenEndpointAuthenticationMethod(registrationRequest.getTokenEndpointAuthMethod()));
+        registeredService.setDpopBoundAccessTokens(registrationRequest.isDpopBoundAccessTokens());
 
         if (StringUtils.isBlank(registeredService.getClientId())) {
             registeredService.setClientId(context.getClientIdGenerator().getNewString());
@@ -230,7 +232,12 @@ public class OidcDefaultClientRegistrationRequestTranslator implements OidcClien
             val secrets = registeredService.getClientSecrets()
                 .stream()
                 .map(secret -> {
-                    if (secret.isWithoutExpiration() || secret.hasClientSecretExpired(registeredService)) {
+                    if (secret.hasClientSecretExpired(registeredService)) {
+                        val clientSecret = context.getClientSecretGenerator().getNewString();
+                        val encodedSecret = context.getRegisteredServiceCipherExecutor().encode(clientSecret);
+                        return new OAuthRegisteredServiceClientSecret(encodedSecret, expirationDate);
+                    }
+                    if (secret.isWithoutExpiration()) {
                         return secret.expireAt(expirationDate);
                     }
                     return secret;
@@ -256,7 +263,8 @@ public class OidcDefaultClientRegistrationRequestTranslator implements OidcClien
     }
 
     private void validate(final OidcClientRegistrationRequest registrationRequest,
-                          final OidcRegisteredService registeredService) throws Exception {
+                          final OidcRegisteredService registeredService)
+            throws Exception {
         val context = configurationContext.getObject();
         if (StringUtils.isNotBlank(registeredService.getSectorIdentifierUri())) {
             HttpResponse sectorResponse = null;
